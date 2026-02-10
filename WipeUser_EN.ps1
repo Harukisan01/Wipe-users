@@ -1,6 +1,6 @@
 ==============================
 
-$UserGroupId = "33a31c3c-b300-4879-bc15-6b6aae9c7f6e"
+$UserGroupId = ""
 
 $DryRun = $false
 $RequireTypedConfirmation = $true
