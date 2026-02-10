@@ -1,4 +1,3 @@
-Ecco il file `.md` completo e pronto per essere pubblicato, con tutte le istruzioni per personalizzare la barra delle applicazioni di Windows 11 tramite Intune:
 
 ```markdown
 ---
