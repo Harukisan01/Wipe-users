@@ -2,7 +2,6 @@
 # CONFIGURAZIONE
 # ==============================
 $UserGroupId = "33a31c3c-b300-4879-bc15-6b6aae9c7f6e"
-# $DeviceGroupId rimosso come richiesto
 
 # Safety switches
 $DryRun = $false
@@ -18,12 +17,11 @@ $Scopes = @(
     "User.ReadWrite.All"
 )
 
-# Connect (Disconnetto prima per forzare un nuovo token/scope)
+# Disconnetto per forzare nuovo token/scope
 Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
 
 Write-Host "Login a Microsoft Graph (interattivo)..."
 Connect-MgGraph -Scopes $Scopes -NoWelcome
-
 
 $ctx = Get-MgContext
 Write-Host "Connesso come: $($ctx.Account) | Tenant: $($ctx.TenantId)"
@@ -57,8 +55,7 @@ function Invoke-Safe {
     param([scriptblock]$Action, [string]$What)
     if ($DryRun) {
         Write-Host "[DRY-RUN] $What" -ForegroundColor Gray
-    }
-    else {
+    } else {
         Write-Host $What -ForegroundColor White
         & $Action
     }
@@ -74,7 +71,7 @@ Test-GuidOrThrow -Value $UserGroupId -Name "UserGroupId"
 # ==============================
 Write-Host "`nRecupero membri del gruppo utenti..."
 $Users = Get-MgGroupMember -GroupId $UserGroupId -All |
-Where-Object { $_.AdditionalProperties.'@odata.type' -eq "#microsoft.graph.user" }
+    Where-Object { $_.AdditionalProperties.'@odata.type' -eq "#microsoft.graph.user" }
 
 Write-Host "Utenti trovati: $($Users.Count)"
 
@@ -82,21 +79,13 @@ Write-Host "Utenti trovati: $($Users.Count)"
 # 1) OPERAZIONI UTENTI (DISTRUTTIVE)
 # ==============================
 if ($Users.Count -gt 0) {
-
     $okUsers = Confirm-DestructiveAction `
         -Title "OPERAZIONI UTENTI (DISTRUTTIVE)" `
-        -Details "Per $($Users.Count) utenti:
-    - Cancello email (mailbox)
-    - Cancello Deleted Items
-    - Cancello OneDrive (Root + Cestino)
-    - Cancello Attività (Timeline)
-    - Revoco sessioni"
+        -Details "Per $($Users.Count) utenti:`n- Cancello email (mailbox)`n- Cancello Deleted Items`n- Cancello OneDrive (Root + Cestino)`n- Cancello Attività (Timeline)`n- Revoco sessioni"
 
     if (-not $okUsers) {
         Write-Host "Operazioni utenti annullate."
-    }
-    else {
-
+    } else {
         foreach ($UserRef in $Users) {
             $UserId = $UserRef.Id
             Write-Host "`n--- Utente: $UserId ---" -ForegroundColor Cyan
@@ -112,8 +101,8 @@ if ($Users.Count -gt 0) {
             # ---------------- Deleted Items ----------------
             Invoke-Safe -What "Elimino 'Deleted Items' per $UserId" -Action {
                 $Deleted = Get-MgUserMailFolder -UserId $UserId -All |
-                Where-Object { $_.DisplayName -eq "Deleted Items" } |
-                Select-Object -First 1
+                    Where-Object { $_.DisplayName -eq "Deleted Items" } |
+                    Select-Object -First 1
 
                 if ($Deleted) {
                     $DeletedMessages = Get-MgUserMailFolderMessage -UserId $UserId -MailFolderId $Deleted.Id -All -Property Id
@@ -125,61 +114,50 @@ if ($Users.Count -gt 0) {
 
             # ---------------- OneDrive (Root + Recycle Bin) ----------------
             Invoke-Safe -What "Pulisco OneDrive (Root) e Cestino per $UserId" -Action {
-                # 1. Get Drive
                 try {
                     $drive = Get-MgUserDrive -UserId $UserId -Property Id -ErrorAction Stop
-                }
-                catch {
+                } catch {
                     if ($_.Exception.Message -match "Access denied") {
                         Write-Host "  [!] ACCESS DENIED: Non hai accesso al OneDrive di questo utente." -ForegroundColor Red
-                        Write-Host "  [?] SOLUZIONE: Aggiungi il tuo account come 'Site Collection Admin' per questo utente." -ForegroundColor Yellow
-                        Write-Host "      Vai su SharePoint Admin Center > User Profiles > Manage User Profiles > Cerca utente > Manage site collection owners." -ForegroundColor Gray
+                        Write-Host "  [?] SOLUZIONE: Aggiungi il tuo account come 'Site Collection Admin'." -ForegroundColor Yellow
                         return
-                    }
-                    else {
+                    } else {
                         Write-Host "  [!] Errore recupero OneDrive: $_" -ForegroundColor Red
                         return
                     }
                 }
 
                 if ($drive) {
-                    # Delete Root Children
                     try {
                         $items = Get-MgDriveRootChild -DriveId $drive.Id -All -Property Id, Name -ErrorAction Stop
                         foreach ($item in $items) {
                             try {
                                 Remove-MgDriveItem -DriveId $drive.Id -DriveItemId $item.Id -Confirm:$false -ErrorAction Stop
+                            } catch {
+                                Write-Host "    [!] Errore cancellazione file '$($item.Name)': $_" -ForegroundColor Red
                             }
-                            catch { Write-Host "    [!] Errore cancellazione file '$($item.Name)': $_" -ForegroundColor Red }
                         }
-                    }
-                    catch { Write-Host "  [!] Errore lettura Root: $_" -ForegroundColor Red }
+                    } catch { Write-Host "  [!] Errore lettura Root: $_" -ForegroundColor Red }
 
-                    # Delete Recycle Bin (Permanent)
                     try {
                         $binItems = Get-MgDriveRecycleBin -DriveId $drive.Id -All -ErrorAction SilentlyContinue
                         foreach ($binItem in $binItems) {
                             Write-Host "  -> Elimino definitivamente: $($binItem.Name)" -ForegroundColor DarkGray
                             Invoke-MgGraphRequest -Method DELETE -Uri "drives/$($drive.Id)/recycleBin/$($binItem.Id)"
                         }
-                    }
-                    catch {
-                        Write-Host "  [!] Errore accesso Cestino OneDrive: $_" -ForegroundColor Red
-                    }
+                    } catch { Write-Host "  [!] Errore accesso Cestino OneDrive: $_" -ForegroundColor Red }
                 }
             }
 
-            # ---------------- User Activities (Timeline/Recent) ----------------
+            # ---------------- User Activities (Timeline) ----------------
             Invoke-Safe -What "Elimino Attività Utente (Timeline/Cronologia) per $UserId" -Action {
                 try {
-                    # Requires explicit UserActivity permissions usually, trying with existing scopes
                     $activities = Get-MgUserActivity -UserId $UserId -All -ErrorAction SilentlyContinue
                     foreach ($act in $activities) {
                         Remove-MgUserActivity -UserId $UserId -ActivityId $act.Id -Confirm:$false
                     }
-                }
-                catch {
-                    Write-Host "  [!] Impossibile pulire attività (possibile mancanza permessi o feature non attiva): $_" -ForegroundColor DarkGray
+                } catch {
+                    Write-Host "  [!] Impossibile pulire attività (permessi/feature mancanti): $_" -ForegroundColor DarkGray
                 }
             }
 
@@ -189,8 +167,7 @@ if ($Users.Count -gt 0) {
             }
         }
     }
-}
-else {
+} else {
     Write-Host "Nessun utente nel gruppo."
 }
 
