@@ -1,16 +1,12 @@
-# ==============================
-# CONFIGURATION
-# ==============================
-$UserGroupId = "33a31c3c-b300-4879-bc15-6b6aae9c7f6e"
-# $DeviceGroupId removed as requested
+==============================
 
-# Safety switches
+$UserGroupId = "33a31c3c-b300-4879-bc15-6b6aae9c7f6e"
+
 $DryRun = $false
 $RequireTypedConfirmation = $true
 
-# ==============================
-# INTERACTIVE LOGIN (Delegated)
-# ==============================
+==============================
+
 $Scopes = @(
     "GroupMember.Read.All",
     "Mail.ReadWrite",
@@ -18,18 +14,16 @@ $Scopes = @(
     "User.ReadWrite.All"
 )
 
-# Connect (Disconnect first to force a new token/scope refresh)
 Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
 
-Write-Host "Logging into Microsoft Graph (interactive)..."
+Write-Host "Login to Microsoft Graph (interactive)..."
 Connect-MgGraph -Scopes $Scopes -NoWelcome
 
 $ctx = Get-MgContext
 Write-Host "Connected as: $($ctx.Account) | Tenant: $($ctx.TenantId)"
 
-# ==============================
-# HELPER FUNCTIONS
-# ==============================
+==============================
+
 function Test-GuidOrThrow {
     param([string]$Value, [string]$Name)
     $g = [guid]::Empty
@@ -48,7 +42,7 @@ function Confirm-DestructiveAction {
     Write-Host ""
 
     if (-not $RequireTypedConfirmation) { return $true }
-    $typed = Read-Host "Type EXACTLY 'EXECUTE' to proceed (anything else to cancel)"
+    $typed = Read-Host "Type EXACTLY 'EXECUTE' to continue (anything else = cancel)"
     return ($typed -eq "EXECUTE")
 }
 
@@ -63,32 +57,29 @@ function Invoke-Safe {
     }
 }
 
-# ==============================
-# INPUT VALIDATION
-# ==============================
+==============================
+
 Test-GuidOrThrow -Value $UserGroupId -Name "UserGroupId"
 
-# ==============================
-# 0) PREVIEW: List Members
-# ==============================
-Write-Host "`nRetrieving user group members..."
+==============================
+
+Write-Host "`nRetrieving group members..."
 $Users = Get-MgGroupMember -GroupId $UserGroupId -All |
 Where-Object { $_.AdditionalProperties.'@odata.type' -eq "#microsoft.graph.user" }
 
 Write-Host "Users found: $($Users.Count)"
 
-# ==============================
-# 1) USER OPERATIONS (DESTRUCTIVE)
-# ==============================
+==============================
+
 if ($Users.Count -gt 0) {
 
     $okUsers = Confirm-DestructiveAction `
         -Title "USER OPERATIONS (DESTRUCTIVE)" `
         -Details "For $($Users.Count) users:
-    - Delete email (mailbox)
+    - Delete emails (mailbox)
     - Delete Deleted Items
     - Delete OneDrive (Root + Recycle Bin)
-    - Delete User Activities (Timeline)
+    - Delete Activities (Timeline)
     - Revoke sessions"
 
     if (-not $okUsers) {
@@ -100,7 +91,6 @@ if ($Users.Count -gt 0) {
             $UserId = $UserRef.Id
             Write-Host "`n--- User: $UserId ---" -ForegroundColor Cyan
 
-            # ---------------- Email ----------------
             Invoke-Safe -What "Deleting mailbox messages for $UserId" -Action {
                 $Messages = Get-MgUserMessage -UserId $UserId -All -Property Id
                 foreach ($Msg in $Messages) {
@@ -108,7 +98,6 @@ if ($Users.Count -gt 0) {
                 }
             }
 
-            # ---------------- Deleted Items ----------------
             Invoke-Safe -What "Deleting 'Deleted Items' for $UserId" -Action {
                 $Deleted = Get-MgUserMailFolder -UserId $UserId -All |
                 Where-Object { $_.DisplayName -eq "Deleted Items" } |
@@ -122,16 +111,14 @@ if ($Users.Count -gt 0) {
                 }
             }
 
-            # ---------------- OneDrive (Root + Recycle Bin) ----------------
             Invoke-Safe -What "Cleaning OneDrive (Root) and Recycle Bin for $UserId" -Action {
-                # 1. Get Drive
                 try {
                     $drive = Get-MgUserDrive -UserId $UserId -Property Id -ErrorAction Stop
                 }
                 catch {
                     if ($_.Exception.Message -match "Access denied") {
                         Write-Host "  [!] ACCESS DENIED: You do not have access to this user's OneDrive." -ForegroundColor Red
-                        Write-Host "  [?] SOLUTION: Add your account as a 'Site Collection Admin' for this user." -ForegroundColor Yellow
+                        Write-Host "  [?] SOLUTION: Add your account as 'Site Collection Admin' for this user." -ForegroundColor Yellow
                         Write-Host "      Go to SharePoint Admin Center > User Profiles > Manage User Profiles > Search user > Manage site collection owners." -ForegroundColor Gray
                         return
                     }
@@ -142,7 +129,6 @@ if ($Users.Count -gt 0) {
                 }
 
                 if ($drive) {
-                    # Delete Root Children
                     try {
                         $items = Get-MgDriveRootChild -DriveId $drive.Id -All -Property Id, Name -ErrorAction Stop
                         foreach ($item in $items) {
@@ -154,7 +140,6 @@ if ($Users.Count -gt 0) {
                     }
                     catch { Write-Host "  [!] Error reading Root: $_" -ForegroundColor Red }
 
-                    # Delete Recycle Bin (Permanent)
                     try {
                         $binItems = Get-MgDriveRecycleBin -DriveId $drive.Id -All -ErrorAction SilentlyContinue
                         foreach ($binItem in $binItems) {
@@ -168,21 +153,18 @@ if ($Users.Count -gt 0) {
                 }
             }
 
-            # ---------------- User Activities (Timeline/Recent) ----------------
             Invoke-Safe -What "Deleting User Activities (Timeline/History) for $UserId" -Action {
                 try {
-                    # Requires explicit UserActivity permissions usually, trying with existing scopes
                     $activities = Get-MgUserActivity -UserId $UserId -All -ErrorAction SilentlyContinue
                     foreach ($act in $activities) {
                         Remove-MgUserActivity -UserId $UserId -ActivityId $act.Id -Confirm:$false
                     }
                 }
                 catch {
-                    Write-Host "  [!] Unable to clear activities (possible permission issue or feature not active): $_" -ForegroundColor DarkGray
+                    Write-Host "  [!] Unable to clean activities (possible missing permissions or feature not active): $_" -ForegroundColor DarkGray
                 }
             }
 
-            # ---------------- Sessions ----------------
             Invoke-Safe -What "Revoking sessions for $UserId" -Action {
                 Revoke-MgUserSignInSession -UserId $UserId | Out-Null
             }
@@ -190,7 +172,7 @@ if ($Users.Count -gt 0) {
     }
 }
 else {
-    Write-Host "No users in the group."
+    Write-Host "No users in group."
 }
 
-Write-Host "`nOPERATIONS COMPLETED."
+Write-Host "`nOPERATIONS COMPLETE."
