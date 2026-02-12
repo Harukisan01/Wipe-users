@@ -104,6 +104,8 @@ Data type: String
 -   Il layout viene applicato al primo accesso dell'utente
 -   Per ambienti Enterprise è consigliato assegnare il profilo come
     Device configuration
+
+    
 info- 
 https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-start#hiderecommendedsection
 https://learn.microsoft.com/en-us/windows/configuration/taskbar/pinned-apps?tabs=intune&pivots=windows-11#taskbar-layout-example
