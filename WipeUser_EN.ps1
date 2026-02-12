@@ -1,141 +1,112 @@
-$UserGroupId = ""
+ ==============================================================================
 
-$DryRun = $false
-$RequireTypedConfirmation = $true
+# --- 1. CONFIGURATION ---
+$UserGroupId = "YOUR_GROUP_ID_HERE" 
+$DryRun = $false 
+$RequireTypedConfirmation = $true 
 
-$Scopes = @(
-    "GroupMember.Read.All",
-    "Mail.ReadWrite",
-    "Files.ReadWrite.All",
-    "User.ReadWrite.All"
-)
+# --- 2. INITIALIZATION ---
+$ErrorActionPreference = "Stop" 
+$Scopes = @( 
+    "GroupMember.Read.All", "Mail.ReadWrite", "Files.ReadWrite.All", 
+    "User.ReadWrite.All", "Sites.ReadWrite.All", "Sites.FullControl.All", 
+    "Organization.Read.All", "Contacts.ReadWrite", "Calendars.ReadWrite", "Tasks.ReadWrite"
+) 
 
-Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
-Write-Host "Login to Microsoft Graph (interactive)..."
-Connect-MgGraph -Scopes $Scopes -NoWelcome
+# --- 3. AUTHENTICATION ---
+Write-Host "Connecting to Microsoft Graph..." -ForegroundColor Cyan 
+Connect-MgGraph -Scopes $Scopes -NoWelcome 
+$ctx = Get-MgContext 
 
-$ctx = Get-MgContext
-Write-Host "Connected as: $($ctx.Account) | Tenant: $($ctx.TenantId)"
+# SharePoint Admin Connection
+try { 
+    $Org = Get-MgOrganization 
+    $TenantName = ($Org.VerifiedDomains | Where-Object { $_.Name -like "*.onmicrosoft.com" } | Select-Object -First 1).Name -replace "\.onmicrosoft\.com", "" 
+    $AdminUrl = "https://$TenantName-admin.sharepoint.com" 
+    Connect-SPOService -Url $AdminUrl 
+} catch { 
+    Write-Warning "Could not connect to SharePoint Admin. Site deletion might fail." 
+} 
 
-function Test-GuidOrThrow {
-    param([string]$Value, [string]$Name)
-    $g = [guid]::Empty
-    if (-not [guid]::TryParse($Value, [ref]$g)) {
-        throw "$Name is not a valid GUID: '$Value'"
-    }
+# ============================== 
+# FUNCTIONS 
+# ============================== 
+
+function Purge-MailboxData {
+    param($UserId)
+    Write-Host "  -> Purging Mailbox (Email, Calendar, Contacts, Tasks)..." -ForegroundColor Yellow
+    
+    # 1. Emails
+    $Msgs = Get-MgUserMessage -UserId $UserId -All -Property Id
+    foreach ($M in $Msgs) { Remove-MgUserMessage -UserId $UserId -MessageId $M.Id -Confirm:$false }
+    
+    # 2. Contacts
+    $Contacts = Get-MgUserContact -UserId $UserId -All -Property Id
+    foreach ($C in $Contacts) { Remove-MgUserContact -UserId $UserId -ContactId $C.Id -Confirm:$false }
+    
+    # 3. Calendar Events
+    $Events = Get-MgUserEvent -UserId $UserId -All -Property Id
+    foreach ($E in $Events) { Remove-MgUserEvent -UserId $UserId -EventId $E.Id -Confirm:$false }
 }
 
-function Confirm-DestructiveAction {
-    param([string]$Title, [string]$Details)
-    Write-Host ""
-    Write-Host "=== $Title ===" -ForegroundColor Yellow
-    Write-Host $Details -ForegroundColor Yellow
-    Write-Host "DryRun=$DryRun" -ForegroundColor Yellow
-    Write-Host ""
-    if (-not $RequireTypedConfirmation) { return $true }
-    $typed = Read-Host "Type EXACTLY 'EXECUTE' to continue (anything else = cancel)"
-    return ($typed -eq "EXECUTE")
+function Clear-SharedWithMeView {
+    param($UserId)
+    Write-Host "  -> Revoking access to 'Shared with me' items..." -ForegroundColor Yellow
+    $SharedItems = Get-MgUserDriveSharedWithMe -UserId $UserId -ErrorAction SilentlyContinue
+    foreach ($Item in $SharedItems) {
+        try {
+            $OwnerDriveId = $Item.RemoteItem.DriveId
+            $ItemId = $Item.RemoteItem.Id
+            $Perms = Get-MgDriveItemPermission -DriveId $OwnerDriveId -DriveItemId $ItemId -ErrorAction SilentlyContinue
+            $TargetPerm = $Perms | Where-Object { $_.GrantedTo.User.Id -eq $UserId -or $_.GrantedToV2.User.Id -eq $UserId }
+            foreach ($P in $TargetPerm) { Remove-MgDriveItemPermission -DriveId $OwnerDriveId -DriveItemId $ItemId -PermissionId $P.Id -Confirm:$false -ErrorAction SilentlyContinue }
+        } catch { continue }
+    }
 }
 
 function Invoke-Safe {
     param([scriptblock]$Action, [string]$What)
-    if ($DryRun) {
-        Write-Host "[DRY-RUN] $What" -ForegroundColor Gray
-    } else {
-        Write-Host $What -ForegroundColor White
-        & $Action
+    if ($DryRun) { Write-Host "[DRY-RUN] Skipping: $What" -ForegroundColor Gray } 
+    else { Write-Host ">>> $What" -ForegroundColor White; & $Action }
+}
+
+# ============================== 
+# MAIN EXECUTION 
+# ============================== 
+
+$Users = Get-MgGroupMember -GroupId $UserGroupId -All | Where-Object { $_.AdditionalProperties.'@odata.type' -eq "#microsoft.graph.user" } 
+
+if ($RequireTypedConfirmation) {
+    $Confirm = Read-Host "Type 'DELETE EVERYTHING' to confirm for $($Users.Count) users"
+    if ($Confirm -ne "DELETE EVERYTHING") { Write-Host "Aborted."; exit }
+}
+
+foreach ($UserRef in $Users) { 
+    $UserId = $UserRef.Id 
+    $User = Get-MgUser -UserId $UserId -Property UserPrincipalName,DisplayName
+    $UserUpn = $User.UserPrincipalName
+    Write-Host "`n>>> Wiping Everything for: $($User.DisplayName)" -ForegroundColor Cyan 
+
+    # 1. TOTAL MAILBOX PURGE
+    Invoke-Safe -What "Full Mailbox Wipe" -Action { Purge-MailboxData -UserId $UserId }
+
+    # 2. ONEDRIVE & SHARED LIST
+    Invoke-Safe -What "Clearing Shared List & Permissions" -Action { Clear-SharedWithMeView -UserId $UserId }
+
+    # 3. NUCLEAR SITE DELETE & RESET
+    Invoke-Safe -What "Deleting OneDrive Site Collection" -Action { 
+        $PersonalUrl = "https://$TenantName-my.sharepoint.com/personal/$($UserUpn -replace '[\.@]', '_')"
+        Remove-SPOSite -Identity $PersonalUrl -NoWait -Confirm:$false -ErrorAction SilentlyContinue
+        Remove-SPODeletedSite -Identity $PersonalUrl -NoWait -Confirm:$false -ErrorAction SilentlyContinue
+        Request-SPOPersonalSite -UserEmails $UserUpn -NoWait
+    }
+
+    # 4. SESSIONS & HISTORY
+    Invoke-Safe -What "Revoking Sessions & History" -Action { 
+        Revoke-MgUserSignInSession -UserId $UserId 
+        $Acts = Get-MgUserActivity -UserId $UserId -All
+        foreach ($A in $Acts) { Remove-MgUserActivity -UserId $UserId -ActivityId $A.Id -Confirm:$false }
     }
 }
 
-Test-GuidOrThrow -Value $UserGroupId -Name "UserGroupId"
-
-Write-Host "`nRetrieving group members..."
-$Users = Get-MgGroupMember -GroupId $UserGroupId -All |
-    Where-Object { $_.AdditionalProperties.'@odata.type' -eq "#microsoft.graph.user" }
-
-Write-Host "Users found: $($Users.Count)"
-
-if ($Users.Count -gt 0) {
-    $okUsers = Confirm-DestructiveAction `
-        -Title "USER OPERATIONS (DESTRUCTIVE)" `
-        -Details "For $($Users.Count) users:`n- Delete emails (mailbox)`n- Delete Deleted Items`n- Delete OneDrive (Root + Recycle Bin)`n- Delete Activities (Timeline)`n- Revoke sessions"
-
-    if (-not $okUsers) {
-        Write-Host "User operations cancelled."
-    } else {
-        foreach ($UserRef in $Users) {
-            $UserId = $UserRef.Id
-            Write-Host "`n--- User: $UserId ---" -ForegroundColor Cyan
-
-            Invoke-Safe -What "Deleting mailbox messages for $UserId" -Action {
-                $Messages = Get-MgUserMessage -UserId $UserId -All -Property Id
-                foreach ($Msg in $Messages) {
-                    Remove-MgUserMessage -UserId $UserId -MessageId $Msg.Id -Confirm:$false
-                }
-            }
-
-            Invoke-Safe -What "Deleting 'Deleted Items' for $UserId" -Action {
-                $Deleted = Get-MgUserMailFolder -UserId $UserId -All |
-                    Where-Object { $_.DisplayName -eq "Deleted Items" } |
-                    Select-Object -First 1
-                if ($Deleted) {
-                    $DeletedMessages = Get-MgUserMailFolderMessage -UserId $UserId -MailFolderId $Deleted.Id -All -Property Id
-                    foreach ($Msg in $DeletedMessages) {
-                        Remove-MgUserMailFolderMessage -UserId $UserId -MailFolderId $Deleted.Id -MessageId $Msg.Id -Confirm:$false
-                    }
-                }
-            }
-
-            Invoke-Safe -What "Cleaning OneDrive (Root) and Recycle Bin for $UserId" -Action {
-                try {
-                    $drive = Get-MgUserDrive -UserId $UserId -Property Id -ErrorAction Stop
-                } catch {
-                    if ($_.Exception.Message -match "Access denied") {
-                        Write-Host "  [!] ACCESS DENIED: You do not have access to this user's OneDrive." -ForegroundColor Red
-                        Write-Host "  [?] SOLUTION: Add your account as 'Site Collection Admin' for this user." -ForegroundColor Yellow
-                        return
-                    } else {
-                        Write-Host "  [!] Error retrieving OneDrive: $_" -ForegroundColor Red
-                        return
-                    }
-                }
-
-                if ($drive) {
-                    try {
-                        $items = Get-MgDriveRootChild -DriveId $drive.Id -All -Property Id, Name -ErrorAction Stop
-                        foreach ($item in $items) {
-                            try {
-                                Remove-MgDriveItem -DriveId $drive.Id -DriveItemId $item.Id -Confirm:$false -ErrorAction Stop
-                            } catch { Write-Host "    [!] Error deleting file '$($item.Name)': $_" -ForegroundColor Red }
-                        }
-                    } catch { Write-Host "  [!] Error reading Root: $_" -ForegroundColor Red }
-
-                    try {
-                        $binItems = Get-MgDriveRecycleBin -DriveId $drive.Id -All -ErrorAction SilentlyContinue
-                        foreach ($binItem in $binItems) {
-                            Write-Host "  -> Permanently deleting: $($binItem.Name)" -ForegroundColor DarkGray
-                            Invoke-MgGraphRequest -Method DELETE -Uri "drives/$($drive.Id)/recycleBin/$($binItem.Id)"
-                        }
-                    } catch { Write-Host "  [!] Error accessing OneDrive Recycle Bin: $_" -ForegroundColor Red }
-                }
-            }
-
-            Invoke-Safe -What "Deleting User Activities (Timeline/History) for $UserId" -Action {
-                try {
-                    $activities = Get-MgUserActivity -UserId $UserId -All -ErrorAction SilentlyContinue
-                    foreach ($act in $activities) {
-                        Remove-MgUserActivity -UserId $UserId -ActivityId $act.Id -Confirm:$false
-                    }
-                } catch { Write-Host "  [!] Unable to clean activities (permissions or feature missing): $_" -ForegroundColor DarkGray }
-            }
-
-            Invoke-Safe -What "Revoking sessions for $UserId" -Action {
-                Revoke-MgUserSignInSession -UserId $UserId | Out-Null
-            }
-        }
-    }
-} else {
-    Write-Host "No users in group."
-}
-
-Write-Host "`nOPERATIONS COMPLETE."
+Write-Host "`nPURGE COMPLETE: All data has been destroyed." -ForegroundColor Green
