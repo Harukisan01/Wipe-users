@@ -400,4 +400,5 @@ $Results | Format-Table -AutoSize
  
 Write-Host "`n`n========================================" -ForegroundColor Green 
 Write-Host "FINE PULIZIA COMPLETA" -ForegroundColor Green 
-Write-Host "========================================`n" -ForegroundColor Green
+Write-Host "========================================" -ForegroundColor Green
+Write-Host ""
