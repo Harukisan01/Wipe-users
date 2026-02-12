@@ -1,73 +1,69 @@
-# Guida all'uso dello Script di Wipe M365 (WipeUser.ps1)
+# Guida all'utilizzo dello script di pulizia utenti Microsoft 365
 
-Questa guida spiega come configurare l'ambiente, i permessi necessari in Microsoft Entra (Azure AD) e come eseguire lo script per pulire gli utenti (Mailbox, OneDrive, Attività).
+Questo script automatizza la pulizia dei dati utente per un gruppo specifico di Microsoft 365. Esegue operazioni su Exchange, OneDrive e Azure AD.
 
-## 1. Prerequisiti
+## Prerequisiti
 
-### Modulo Microsoft Graph PowerShell
-Lo script richiede il modulo PowerShell di Microsoft Graph. Se non è installato, esegui questo comando in una console PowerShell come Amministratore:
+Per eseguire questo script, assicurati di avere:
 
-```powershell
-Install-Module Microsoft.Graph -Scope CurrentUser -Force
-```
-
-## 2. Permessi Richiesti (Entra ID)
-
-Lo script utilizza l'autenticazione **Delegated** (eseguito con le tue credenziali di amministratore).
-
-### Ruoli Amministrativi Necessari
-L'account che esegue lo script deve avere uno dei seguenti ruoli in Entra ID per poter cancellare dati e revocare sessioni:
--   **Global Administrator** (Consigliato per evitare problemi di accesso a OneDrive/Mailbox altrui).
--   **User Administrator** (Per revocare sessioni e gestire utenti).
--   **Exchange Administrator** (Per accedere alle mailbox, anche se potrebbe non bastare senza *Full Access*).
--   **SharePoint Administrator** (Per accedere ai siti OneDrive personali).
-
-> [!IMPORTANT]
-> **Errore 403 (Access Denied) su OneDrive**: 
-> Anche con il ruolo Global Admin, l'accesso ai *contenuti* del OneDrive di un altro utente potrebbe essere bloccato di default. 
-> Se ricevi un errore "403 Forbidden" su `Get-MgUserDrive`, devi aggiungere il tuo account come **Amministratore della raccolta siti** (Site Collection Admin) per il OneDrive dell'utente.
-> Questo si può fare dallo **SharePoint Admin Center** > **More features** > **User profiles** > **Manage User Profiles** > Cerca utente > **Manage site collection owners**.
-> Oppure via PowerShell (`Set-SPOUser`).
-
-### Scopes (Permessi API)
-Al primo avvio, lo script chiederà il consenso per i seguenti permessi:
--   `GroupMember.Read.All`: Leggere membri dei gruppi.
--   `Mail.ReadWrite`: Leggere e cancellare email *di qualsiasi utente*.
--   `Files.ReadWrite.All`: Leggere e cancellare file OneDrive *di qualsiasi utente*.
--   `User.ReadWrite.All`: Modificare utenti e revocare sessioni.
-
-## 3. Configurazione dello Script
-
-Apri il file `WipeUser.ps1` e verifica la sezione **CONFIGURAZIONE** in alto:
-
-```powershell
-$UserGroupId = "INSERISCI-IL-GUID-DEL-GRUPPO" 
-# Esempio: "33a31c3c-b300-4879-bc15-6b6aae9c7f6e"
-```
-Assicurati che l'ID del gruppo sia corretto e contenga gli utenti da pulire.
-
-## 4. Esecuzione
-
-1.  Apri PowerShell.
-2.  Spostati nella cartella dello script:
+1.  **PowerShell 5.1** o **PowerShell 7+** installato.
+2.  **Moduli PowerShell** richiesti:
+    *   `Microsoft.Graph`
+    *   `Microsoft.Online.SharePoint.PowerShell`
+    
+    Se non presenti, lo script tenterà di installare il modulo SharePoint, ma è consigliato averli già pronti:
     ```powershell
-    cd c:\Temp\Wipe
+    Install-Module Microsoft.Graph -Scope CurrentUser
+    Install-Module Microsoft.Online.SharePoint.PowerShell -Scope CurrentUser
     ```
-3.  Avvia lo script:
+
+3.  **Permessi Admin**:
+    *   L'utente che esegue lo script deve essere **Global Admin** o avere i ruoli combinati di **SharePoint Admin** e **User Admin**.
+
+## Configurazione
+
+Apri il file `cleanup_user_data.ps1` e modifica la sezione **CONFIGURAZIONE** se necessario:
+
+*   `$UserGroupId`: Inserisci l'ID del gruppo Azure AD che contiene gli utenti da ripulire.
+    *   *Default*: `"33a31c3c-b300-4879-bc15-6b6aae9c7f6e"`
+*   `$DryRun`: Imposta a `$true` per simulare l'esecuzione senza cancellare nulla. Imposta a `$false` per eseguire realmente le cancellazioni.
+    *   *Default*: `$false`
+
+## Cosa fa lo script
+
+Lo script itera su ogni utente del gruppo specificato ed esegue le seguenti azioni:
+
+1.  **Pulizia Email**: Cancella tutti i messaggi dalla casella di posta.
+2.  **Posta Eliminata**: Svuota la cartella "Deleted Items".
+3.  **Cartelle OneDrive Specifiche**:
+    *   Elimina ricorsivamente la cartella `/shared` (condivisi con me/da me).
+    *   Elimina ricorsivamente la cartella `/favorites` (preferiti).
+    *   Elimina ricorsivamente la cartella `/my` (cartella personale se presente).
+    *   **Svuota il Cestino** di OneDrive (Recycle Bin).
+4.  **Reset Totale OneDrive**:
+    *   Elimina l'intera Site Collection dell'utente (provoca un errore 404).
+    *   Rimuove il sito dal Cestino di SharePoint (eliminazione definitiva).
+    *   Richiede il provisioning di un nuovo OneDrive vuoto.
+5.  **Pulizia Attività**: Rimuove la cronologia attività utente.
+6.  **Revoca Sessioni**: Disconnette l'utente da tutte le sessioni attive.
+
+### Purge Definitivo Globale
+Alla fine del ciclo sugli utenti, lo script esegue una scansione globale del **Cestino di SharePoint** (`Get-SPODeletedSite`) e rimuove definitivamente qualsiasi sito personale (`*-my.sharepoint.com/personal/*`) rimasto, per garantire che non ci siano residui.
+
+## Esecuzione
+
+1.  Apri una console PowerShell come Amministratore.
+2.  Naviga nella cartella dove hai salvato lo script.
+3.  Esegui:
     ```powershell
-    .\WipeUser.ps1
+    .\cleanup_user_data.ps1
     ```
-4.  **Login**: Si aprirà una finestra browser. Fai il login con il tuo account Amministratore (es. `admin@tuotenant.onmicrosoft.com`).
-5.  **Consenso**: Se richiesto, accetta i permessi (spunta "Consent on behalf of your organization" se vuoi evitare che lo chieda ad altri admin, ma qui serve solo a te).
-6.  **Conferma**: Lo script mostrerà un riepilogo.
-    -   Se `$DryRun = $true`, simulerà solo le operazioni.
-    -   Se `$DryRun = $false`, scrivi **ESEGUI** quando richiesto per procedere con la cancellazione.
+4.  Segui le istruzioni a video:
+    *   Verrà richiesto il login a Microsoft Graph (via browser).
+    *   Lo script tenterà di connettersi automaticamente a SharePoint Online. Se fallisce, ti chiederà l'URL Admin (es. `https://tuotenant-admin.sharepoint.com`).
+    *   Dovrai digitare `ESEGUI` per confermare l'avvio delle operazioni distruttive.
 
-## 5. Risoluzione Problemi
+## Note Importanti
 
-| Errore | Causa Probabile | Soluzione |
-| :--- | :--- | :--- |
-| `Authentication needed...` | Token scaduto o non valido. | Lo script ora forza il re-login a ogni avvio. Riprova. |
-| `Get-MgUserDrive : Access denied (403)` | Non hai permessi diretti sul OneDrive dell'utente. | Aggiungi il tuo account come "Site Collection Admin" al OneDrive dell'utente (vedi sezione 2). Oppure usa un'App Registration (metodo avanzato). |
-| `ResourceNotFound (404)` | La mailbox o il drive non esistono. | L'utente potrebbe non avere una licenza valida o non aver mai fatto accesso a OneDrive/Outlook. |
-| `Revoke-MgUserSignInSession` fallisce | Permessi insufficienti. | Assicurati di essere **User Administrator** o **Global Admin**. |
+*   **Irreversibilità**: Le azioni di cancellazione (email, file, siti) sono definitive. Assicurati di aver impostato correttamente il gruppo target.
+*   **Tempi di attesa**: La ricreazione di un OneDrive dopo la cancellazione può richiedere da 15 minuti a 24 ore lato Microsoft, anche se lo script termina prima.
