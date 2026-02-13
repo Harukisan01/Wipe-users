@@ -12,7 +12,7 @@ Questa guida descrive come configurare un'automazione su Microsoft Azure per eli
 Per permettere allo script di agire sul tenant senza login manuale, dobbiamo creare un'identità digitale (Service Principal).
 
 1. Accedi al [Portale Azure](https://portal.azure.com).
-2. Vai su **Microsoft Entra ID** (ex Azure Active Directory).
+2. Vai su **Microsoft Entra ID**.
 3. Nel menu a sinistra, seleziona **App registrations** > **New registration**.
    - **Name:** `WipeUser-Automation-App`
    - **Supported account types:** Accounts in this organizational directory only (Single tenant).
