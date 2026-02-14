@@ -60,3 +60,12 @@ The script will:
 ## Security Note
 
 This method ensures that even if the script execution environment is compromised, the attacker cannot steal the private key because it never leaves the Azure Key Vault HSM (Hardware Security Module).
+
+## Sources and Credits
+
+This solution integrates advanced FIDO2/Passkey authentication logic developed by **Nathan McNulty**.
+The scripts `Initialize-PasskeyKeyVault.ps1`, `New-KeyVaultPasskey.ps1`, and `PasskeyLogin.ps1` are based on his work available at:
+
+*   [Nathan McNulty - Entra ID Passkey Management Scripts](https://github.com/nathanmcnulty/nathanmcnulty/tree/main/Entra/passkeys/keyvault)
+
+We acknowledge and thank the author for providing this robust security implementation.

@@ -40,6 +40,8 @@ The solution is provided in three levels of complexity and security, ranging fro
 2.  Register a secure passkey for your admin account using `New-KeyVaultPasskey.ps1`.
 3.  Run the wipe script using `Level3_WipeUser_Passkey.ps1` which authenticates using the secure passkey.
 
+**Source:** Based on the work by [Nathan McNulty](https://github.com/nathanmcnulty/nathanmcnulty/tree/main/Entra/passkeys/keyvault).
+
 [View Level 3 Documentation](Level3_BankProtection.md)
 
 ---
