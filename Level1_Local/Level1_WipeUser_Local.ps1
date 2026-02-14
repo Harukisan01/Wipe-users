@@ -50,21 +50,36 @@ try {
 
     # ADVANCED ADMIN URL RECOVERY
     try {
-        $RootSite = Get-MgSite -Filter "siteCollection/root ne null" -Select "webUrl" -ErrorAction Stop
-        if ($RootSite -and $RootSite.WebUrl) {
-            $TenantHost = ([Uri]$RootSite.WebUrl).Host
-            $TenantName = $TenantHost -replace "\.sharepoint\.com", ""
+        # Method 1: Extract from Authenticated Context (Fastest, no API call needed)
+        if ($ctx.Account -match "@(?<domain>[^\.]+)\.onmicrosoft\.com") {
+            $TenantName = $Matches['domain']
             $AdminUrl = "https://$TenantName-admin.sharepoint.com"
-            Write-Host "  -> Admin URL detected from Graph: $AdminUrl" -ForegroundColor DarkGray
-        } else {
-            throw "Unable to find Root Site via Graph."
+            Write-Host "  -> Admin URL inferred from UPN: $AdminUrl" -ForegroundColor DarkGray
+        }
+        # Method 2: Get Root Site from Graph
+        elseif ($null -eq $AdminUrl) {
+            $RootSite = Get-MgSite -Filter "siteCollection/root ne null" -Select "webUrl" -ErrorAction Stop
+            if ($RootSite -and $RootSite.WebUrl) {
+                $TenantHost = ([Uri]$RootSite.WebUrl).Host
+                $TenantName = $TenantHost -replace "\.sharepoint\.com", ""
+                $AdminUrl = "https://$TenantName-admin.sharepoint.com"
+                Write-Host "  -> Admin URL detected from Graph: $AdminUrl" -ForegroundColor DarkGray
+            }
         }
     } catch {
-        Write-Warning "Graph method failed. Trying legacy method..."
-        $Org = Get-MgOrganization
-        $OnMicrosoftDomain = $Org.VerifiedDomains | Where-Object { $_.Name -like "*.onmicrosoft.com" } | Select-Object -First 1 -ExpandProperty Name
-        $TenantName = $OnMicrosoftDomain -replace "\.onmicrosoft\.com", ""
-        $AdminUrl = "https://$TenantName-admin.sharepoint.com"
+        Write-Warning "Automatic detection failed. Proceeding to manual fallback if needed."
+    }
+
+    # Method 3: Manual Input Fallback
+    if ([string]::IsNullOrWhiteSpace($AdminUrl) -or $AdminUrl -like "https://-admin.sharepoint.com") {
+        Write-Warning "Could not detect Tenant Name automatically."
+        $TenantName = Read-Host "Please enter your Tenant Name (e.g., 'contoso' for contoso.onmicrosoft.com)"
+        if (-not [string]::IsNullOrWhiteSpace($TenantName)) {
+            $AdminUrl = "https://$TenantName-admin.sharepoint.com"
+        } else {
+            Write-Error "Tenant Name is required to connect to SharePoint."
+            exit 1
+        }
     }
 
     # Attempt SharePoint Connection (PnP)
