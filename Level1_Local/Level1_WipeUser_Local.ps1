@@ -89,17 +89,29 @@ try {
             $ErrorMsg = $_.Exception.Message
             Write-Host "Connection Error ($AdminUrl): $ErrorMsg" -ForegroundColor Red
 
+            # Retry with legacy WebLogin if available (handles some MFA scenarios better)
+            if ($retryCount -eq 2) {
+                 Write-Host "  -> Attempting legacy -UseWebLogin fallback..." -ForegroundColor Yellow
+                 try {
+                     Connect-SPOService -Url $AdminUrl -UseWebLogin -ErrorAction Stop
+                     Write-Host "Connected to SharePoint (WebLogin)!" -ForegroundColor Green
+                     $connected = $true
+                     break
+                 } catch {
+                     Write-Host "  -> WebLogin failed: $($_.Exception.Message)" -ForegroundColor Red
+                 }
+            }
+
             if ($ErrorMsg -like "*There is no service currently connected*" -or $ErrorMsg -like "*No connection*") {
                 Write-Host "  [TIP] If authentication failed or was cancelled, retry." -ForegroundColor Yellow
-                Write-Host "  [TIP] Also check if your tenant allows legacy auth or requires MFA." -ForegroundColor Yellow
             } elseif ($ErrorMsg -like "*(400)*") {
                 Write-Host "  [TIP] '400 Bad Request' often indicates a session conflict or missing SharePoint Admin role." -ForegroundColor Yellow
-                Write-Host "  [TIP] Please ensure you are a Global or SharePoint Admin." -ForegroundColor Yellow
             }
 
             if ($retryCount -ge $maxRetries) {
-                Write-Error "Failed to connect to SharePoint after $maxRetries attempts. Please check your credentials and Admin URL."
-                break
+                Write-Error "CRITICAL: Failed to connect to SharePoint after $maxRetries attempts."
+                Write-Host "The script will now EXIT to prevent partial execution." -ForegroundColor Red
+                exit 1 # Exit immediately
             }
 
             Write-Host "Retrying in 2 seconds..." -ForegroundColor Gray
@@ -108,7 +120,8 @@ try {
     } until ($connected)
 
 } catch {
-    Write-Host "SharePoint Initialization Error: $_" -ForegroundColor Red
+    Write-Host "SharePoint Initialization Critical Error: $_" -ForegroundColor Red
+    exit 1
 }
 
 # ==============================

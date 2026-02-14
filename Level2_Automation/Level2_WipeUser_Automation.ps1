@@ -144,6 +144,10 @@ try {
 
 } catch {
     Write-Error "SharePoint Initialization Error: $_"
+    # Automation: Continue? Or Exit?
+    # Destructive actions on OneDrive rely on this.
+    Write-Error "CRITICAL: SharePoint connection failed. Exiting to prevent partial wipe."
+    exit 1
 }
 
 # ==============================

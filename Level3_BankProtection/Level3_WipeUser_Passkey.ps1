@@ -118,6 +118,8 @@ try {
     Write-Host "Connected to SharePoint!" -ForegroundColor Green
 } catch {
     Write-Error "SharePoint Connection Failed: $_"
+    Write-Error "CRITICAL: SharePoint connection failed. Exiting to prevent partial wipe."
+    exit 1
 }
 
 # ==============================
