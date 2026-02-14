@@ -3,6 +3,7 @@
 # ==============================
 $ErrorActionPreference = "Stop"
 $RequireTypedConfirmation = $false # Disable confirmation for automation
+$DryRun = $false # Set to $true to simulate actions without execution
 
 # Configuration (to be filled or passed as parameters)
 # $TenantId = "..."
