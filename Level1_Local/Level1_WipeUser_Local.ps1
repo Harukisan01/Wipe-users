@@ -36,6 +36,10 @@ Write-Host "Graph Connected: $($ctx.Account) | Tenant: $($ctx.TenantId)" -Foregr
 try {
     Write-Host "`nVerifying SharePoint Online module..." -ForegroundColor Cyan
 
+    # Disable WAM to avoid 400 Bad Request errors in embedded sessions
+    $env:MSAL_USE_BROKER_WITH_WAM = "false"
+    Write-Host "  -> Broker/WAM disabled for stability." -ForegroundColor DarkGray
+
     $SPModule = Get-Module -ListAvailable -Name Microsoft.Online.SharePoint.PowerShell | Select-Object -First 1
     if (-not $SPModule) {
         Write-Warning "SharePoint module not found. Installing..."
@@ -68,9 +72,13 @@ try {
 
     # Attempt SharePoint Connection
     $connected = $false
+    $maxRetries = 3
+    $retryCount = 0
+
     do {
         try {
-            Write-Host "Connecting to SharePoint ($AdminUrl)..." -ForegroundColor Cyan
+            $retryCount++
+            Write-Host "Connecting to SharePoint ($AdminUrl)... (Attempt $retryCount/$maxRetries)" -ForegroundColor Cyan
 
             # Use simple interactive connection
             Connect-SPOService -Url $AdminUrl -ErrorAction Stop
@@ -89,12 +97,13 @@ try {
                 Write-Host "  [TIP] Please ensure you are a Global or SharePoint Admin." -ForegroundColor Yellow
             }
 
-            $userInput = Read-Host "Press ENTER to retry, or type new Admin URL (e.g., https://tenant-admin.sharepoint.com)"
-            if (-not [string]::IsNullOrWhiteSpace($userInput)) {
-                $AdminUrl = $userInput.Trim()
-            } else {
-                Write-Host "Retrying..." -ForegroundColor Gray
+            if ($retryCount -ge $maxRetries) {
+                Write-Error "Failed to connect to SharePoint after $maxRetries attempts. Please check your credentials and Admin URL."
+                break
             }
+
+            Write-Host "Retrying in 2 seconds..." -ForegroundColor Gray
+            Start-Sleep -Seconds 2
         }
     } until ($connected)
 

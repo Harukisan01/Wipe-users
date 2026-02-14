@@ -99,8 +99,16 @@ try {
     $TenantName = $TenantHost -replace "\.sharepoint\.com", ""
     $AdminUrl = "https://$TenantName-admin.sharepoint.com"
 } catch {
-    $AdminUrl = Read-Host "Enter SharePoint Admin URL (e.g. https://contoso-admin.sharepoint.com)"
-    $TenantName = $AdminUrl -replace "https://", "" -replace "-admin.sharepoint.com", ""
+    # Fallback: Try to guess from default domain (often unreliable but better than prompt in automation)
+    try {
+        $Org = Get-MgOrganization
+        $OnMicrosoftDomain = $Org.VerifiedDomains | Where-Object { $_.Name -like "*.onmicrosoft.com" } | Select-Object -First 1 -ExpandProperty Name
+        $TenantName = $OnMicrosoftDomain -replace "\.onmicrosoft\.com", ""
+        $AdminUrl = "https://$TenantName-admin.sharepoint.com"
+    } catch {
+        Write-Error "Could not detect SharePoint Admin URL automatically. Please ensure the user has access to Graph or provide the URL via parameter."
+        exit 1
+    }
 }
 
 Write-Host "Connecting to SharePoint Online..." -ForegroundColor Cyan
