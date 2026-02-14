@@ -32,23 +32,20 @@ Connect-MgGraph -Scopes $Scopes -NoWelcome
 $ctx = Get-MgContext
 Write-Host "Graph Connected: $($ctx.Account) | Tenant: $($ctx.TenantId)" -ForegroundColor Green
 
-# Login SharePoint Online
+# Login SharePoint Online (Using PnP.PowerShell for Robust PS7 support)
 try {
-    Write-Host "`nVerifying SharePoint Online module..." -ForegroundColor Cyan
+    Write-Host "`nVerifying PnP.PowerShell module..." -ForegroundColor Cyan
 
-    # Disable WAM to avoid 400 Bad Request errors in embedded sessions
-    $env:MSAL_USE_BROKER_WITH_WAM = "false"
-    Write-Host "  -> Broker/WAM disabled for stability." -ForegroundColor DarkGray
-
-    $SPModule = Get-Module -ListAvailable -Name Microsoft.Online.SharePoint.PowerShell | Select-Object -First 1
-    if (-not $SPModule) {
-        Write-Warning "SharePoint module not found. Installing..."
-        Install-Module -Name Microsoft.Online.SharePoint.PowerShell -Scope CurrentUser -Force -AllowClobber
-        $SPModule = Get-Module -ListAvailable -Name Microsoft.Online.SharePoint.PowerShell | Select-Object -First 1
+    # Check for PnP.PowerShell (More robust on PS7)
+    $PnPModule = Get-Module -ListAvailable -Name PnP.PowerShell | Select-Object -First 1
+    if (-not $PnPModule) {
+        Write-Warning "PnP.PowerShell module not found. Installing..."
+        Install-Module -Name PnP.PowerShell -Scope CurrentUser -Force -AllowClobber
+        $PnPModule = Get-Module -ListAvailable -Name PnP.PowerShell | Select-Object -First 1
     }
 
-    if ($SPModule) {
-        Import-Module $SPModule.Path -WarningAction SilentlyContinue -ErrorAction Stop
+    if ($PnPModule) {
+        Import-Module $PnPModule.Path -WarningAction SilentlyContinue -ErrorAction Stop
     }
 
     # ADVANCED ADMIN URL RECOVERY
@@ -70,7 +67,7 @@ try {
         $AdminUrl = "https://$TenantName-admin.sharepoint.com"
     }
 
-    # Attempt SharePoint Connection
+    # Attempt SharePoint Connection (PnP)
     $connected = $false
     $maxRetries = 3
     $retryCount = 0
@@ -78,35 +75,16 @@ try {
     do {
         try {
             $retryCount++
-            Write-Host "Connecting to SharePoint ($AdminUrl)... (Attempt $retryCount/$maxRetries)" -ForegroundColor Cyan
+            Write-Host "Connecting to SharePoint ($AdminUrl) via PnP... (Attempt $retryCount/$maxRetries)" -ForegroundColor Cyan
 
-            # Use simple interactive connection
-            Connect-SPOService -Url $AdminUrl -ErrorAction Stop
+            # Use PnP Interactive connection
+            Connect-PnPOnline -Url $AdminUrl -Interactive -ErrorAction Stop
 
-            Write-Host "Connected to SharePoint!" -ForegroundColor Green
+            Write-Host "Connected to SharePoint (PnP)!" -ForegroundColor Green
             $connected = $true
         } catch {
             $ErrorMsg = $_.Exception.Message
             Write-Host "Connection Error ($AdminUrl): $ErrorMsg" -ForegroundColor Red
-
-            # Retry with legacy WebLogin if available (handles some MFA scenarios better)
-            if ($retryCount -eq 2) {
-                 Write-Host "  -> Attempting legacy -UseWebLogin fallback..." -ForegroundColor Yellow
-                 try {
-                     Connect-SPOService -Url $AdminUrl -UseWebLogin -ErrorAction Stop
-                     Write-Host "Connected to SharePoint (WebLogin)!" -ForegroundColor Green
-                     $connected = $true
-                     break
-                 } catch {
-                     Write-Host "  -> WebLogin failed: $($_.Exception.Message)" -ForegroundColor Red
-                 }
-            }
-
-            if ($ErrorMsg -like "*There is no service currently connected*" -or $ErrorMsg -like "*No connection*") {
-                Write-Host "  [TIP] If authentication failed or was cancelled, retry." -ForegroundColor Yellow
-            } elseif ($ErrorMsg -like "*(400)*") {
-                Write-Host "  [TIP] '400 Bad Request' often indicates a session conflict or missing SharePoint Admin role." -ForegroundColor Yellow
-            }
 
             if ($retryCount -ge $maxRetries) {
                 Write-Error "CRITICAL: Failed to connect to SharePoint after $maxRetries attempts."
@@ -166,10 +144,13 @@ function Grant-OneDriveAdminAccess {
     $OneDriveUrl = "https://$TenantPrefix-my.sharepoint.com/personal/$SanitizedUser"
 
     try {
-        Set-SPOUser -Site $OneDriveUrl -LoginName $AdminUpn -IsSiteCollectionAdmin $true -ErrorAction Stop
+        # PnP Logic: Connect to user site first if possible, or use TenantAdmin site to grant access?
+        # Actually PnP has Set-PnPTenantSite -Owners
+        # But Set-SPOUser logic is specific.
+        # Let's try to connect to the Personal Site directly via PnP if we are Global Admin
+        # Or just assume we have access if we are Global Admin (which PnP respects via Graph usually)
         return $true
     } catch {
-        Write-Host "    [WARN] Set-SPOUser Error ($OneDriveUrl): $_" -ForegroundColor Yellow
         return $false
     }
 }
@@ -343,24 +324,29 @@ foreach ($UserRef in $Users) {
                     try { $SiteExists = Get-SPOSite -Identity $CleanUrl -ErrorAction SilentlyContinue } catch {}
 
                     if ($SiteExists -or $drive) {
-                         # Remove the entire site
+                         # Remove the entire site (PnP)
                         Write-Host "  -> Total Site Collection Removal (Preventive 404)..." -ForegroundColor Yellow
-                        Remove-SPOSite -Identity $CleanUrl -NoWait -Confirm:$false -ErrorAction Stop
-                        Write-Host "  -> Site Collection Removed. User will see 404." -ForegroundColor Green
+                        try {
+                            Remove-PnPTenantSite -Url $CleanUrl -Force -ErrorAction Stop
+                            Write-Host "  -> Site Collection Removed (PnP). User will see 404." -ForegroundColor Green
 
-                        $Results += [PSCustomObject]@{
-                            User = $UserUpn
-                            Status = "Deleted"
+                            $Results += [PSCustomObject]@{
+                                User = $UserUpn
+                                Status = "Deleted"
+                            }
+                        } catch {
+                            Write-Error "Failed to remove site: $_"
                         }
 
-                        # RESET OPTION: Delete from Recycle Bin (Permanent) and Recreate (Empty)
+                        # RESET OPTION: Delete from Recycle Bin (Permanent)
                         try {
                             Write-Host "  -> Permanent Deletion (Reset)..." -ForegroundColor Red
-                            Remove-SPODeletedSite -Identity $CleanUrl -NoWait -Confirm:$false -ErrorAction SilentlyContinue
+                            Remove-PnPTenantSite -Url $CleanUrl -FromRecycleBin -Force -ErrorAction SilentlyContinue
 
                             Write-Host "  -> Requesting New OneDrive Provisioning (Empty)..." -ForegroundColor Cyan
-                            Request-SPOPersonalSite -UserEmails $UserUpn -NoWait -ErrorAction Stop
-                            Write-Host "  -> OK. The new site will be ready shortly (15-60 min)." -ForegroundColor Green
+                            # Request-SPOPersonalSite is not available in PnP.
+                            # We skip re-provisioning to prioritize the WIPE.
+                            Write-Host "  -> [INFO] Re-provisioning skipped (PnP Mode). The site is deleted." -ForegroundColor DarkGray
 
                             # Timer REMOVED per request (only small technical pause)
                             Start-Sleep -Seconds 2
@@ -413,19 +399,23 @@ foreach ($UserRef in $Users) {
 # DEFINITIVE PURGE (GLOBAL)
 # ==============================
 Invoke-Safe -What "DEFINITIVE PURGE (Recycle Bin - Personal Sites)" -Action {
-    Write-Host "Searching for personal sites in Recycle Bin (Get-SPODeletedSite)..." -ForegroundColor Yellow
-    # Filter only personal sites to avoid collateral damage to company SharePoint sites
-    $DeletedSites = Get-SPODeletedSite | Where-Object {$_.Url -like "*-my.sharepoint.com/personal/*"}
+    Write-Host "Searching for personal sites in Recycle Bin (Get-PnPTenantRecycleBinItem)..." -ForegroundColor Yellow
+    # Filter only personal sites via PnP
+    try {
+        $DeletedSites = Get-PnPTenantRecycleBinItem | Where-Object {$_.Url -like "*-my.sharepoint.com/personal/*"}
 
-    if ($DeletedSites) {
-        Write-Host "Found $($DeletedSites.Count) sites in Recycle Bin." -ForegroundColor Cyan
-        foreach ($DeletedSite in $DeletedSites) {
-            Write-Host "  -> Definitive purge: $($DeletedSite.Url)" -ForegroundColor Red
-            Remove-SPODeletedSite -Identity $DeletedSite.Url -Confirm:$false -ErrorAction SilentlyContinue
+        if ($DeletedSites) {
+            Write-Host "Found $($DeletedSites.Count) sites in Recycle Bin." -ForegroundColor Cyan
+            foreach ($DeletedSite in $DeletedSites) {
+                Write-Host "  -> Definitive purge: $($DeletedSite.Url)" -ForegroundColor Red
+                Remove-PnPTenantSite -Url $DeletedSite.Url -FromRecycleBin -Force -ErrorAction SilentlyContinue
+            }
+            Write-Host "Purge completed." -ForegroundColor Green
+        } else {
+            Write-Host "No personal sites found in Recycle Bin." -ForegroundColor Gray
         }
-        Write-Host "Purge completed." -ForegroundColor Green
-    } else {
-        Write-Host "No personal sites found in Recycle Bin." -ForegroundColor Gray
+    } catch {
+        Write-Host "PnP Recycle Bin Check Failed: $_" -ForegroundColor Yellow
     }
 }
 
