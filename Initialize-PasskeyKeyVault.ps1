@@ -30,7 +30,7 @@
     Name of Key Vault. Must be globally unique. Default: kv-passkey-[random]
 
 .PARAMETER Location
-    Azure region for resources. Default: eastus
+    Azure region for resources. Default: westeurope
 
 .PARAMETER ServicePrincipalName
     Display name for service principal. Default: KeyVault-Passkey-Service
@@ -100,7 +100,7 @@ param(
     [string]$KeyVaultName,
 
     [Parameter(Mandatory = $false)]
-    [string]$Location = "eastus",
+    [string]$Location = "westeurope",
 
     [Parameter(Mandatory = $false)]
     [string]$ServicePrincipalName = "KeyVault-Passkey-Service",
@@ -457,8 +457,7 @@ if ($canGrantConsent) {
     try {
         # Check if consent already granted
         $existingGrants = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/v1.0/servicePrincipals/$spObjectId/appRoleAssignments"
-        $alreadyGranted = $existingGrants.value | Where-Object { $_.appRoleId -e
-q $permission.id -and $_.resourceId -eq $graphSPId }
+        $alreadyGranted = $existingGrants.value | Where-Object { $_.appRoleId -eq $permission.id -and $_.resourceId -eq $graphSPId }
 
         if ($alreadyGranted) {
             Write-Success "Admin consent already granted"

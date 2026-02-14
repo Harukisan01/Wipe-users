@@ -15,7 +15,7 @@ This level provides the highest level of security by using **FIDO2 Passkeys** (p
 Run the initialization script to set up the Key Vault, App Registration, and Permissions.
 
 ```powershell
-.\Initialize-PasskeyKeyVault.ps1 -KeyVaultSku Standard -Location "eastus"
+.\Initialize-PasskeyKeyVault.ps1 -KeyVaultSku Standard -Location "westeurope"
 ```
 *   Save the **ClientId**, **ClientSecret**, and **KeyVaultName** provided in the output.
 

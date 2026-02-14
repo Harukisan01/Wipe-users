@@ -56,6 +56,12 @@ function Get-GraphTokenFromSession {
 
     Write-Host "Exchanging Session for Graph Access Token..." -ForegroundColor Cyan
 
+    # Ensure Portal Cookies are set (SSO)
+    try {
+        Write-Host "  -> Visiting Portal Home..." -ForegroundColor Gray
+        $null = Invoke-WebRequest -Uri "https://portal.azure.com" -WebSession $Session -Method Get -ErrorAction SilentlyContinue
+    } catch {}
+
     # Hit Portal API to get token
     $TokenUrl = "https://portal.azure.com/api/delegation/token?feature=access_token&scope=user_impersonation&extensionName=Microsoft_Azure_AD"
 
