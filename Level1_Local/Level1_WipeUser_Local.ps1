@@ -33,35 +33,35 @@ if (-not (Get-Module -ListAvailable -Name PnP.PowerShell)) {
 Import-Module PnP.PowerShell -WarningAction SilentlyContinue -ErrorAction Stop
 
 # 2. Authentication & Admin URL Discovery
-Write-Host "Connecting to Microsoft 365 (Interactive)..." -ForegroundColor Cyan
+Write-Host "Connecting to Microsoft 365..." -ForegroundColor Cyan
 
-# We try to connect to the Admin Site initially to get full SPO privileges
-# But we don't know the Admin URL yet.
-# Strategy: Connect to Graph first (no URL) to get tenant info, then reconnect to Admin.
+# PnP PowerShell usually requires a Target URL to connect.
+# Auto-discovery without a URL is difficult/fragile.
+# We will ask for the Tenant Domain to ensure stability.
+
+$TenantName = Read-Host "Enter your Tenant Name (e.g. 'contoso' for contoso.onmicrosoft.com)"
+if ([string]::IsNullOrWhiteSpace($TenantName)) {
+    Write-Error "Tenant Name is required."
+    exit 1
+}
+
+$AdminUrl = "https://$TenantName-admin.sharepoint.com"
+Write-Host "Target Admin URL: $AdminUrl" -ForegroundColor DarkGray
 
 try {
-    # Initial connection to get Graph access
-    Connect-PnPOnline -Scopes $Scopes -Interactive -ErrorAction Stop
-    $ctx = Get-PnPContext
-    Write-Host "Connected to Graph!" -ForegroundColor Green
+    # Connect directly to the Admin URL
+    # We remove -Scopes as it's not supported in all PnP versions directly on Connect.
+    # PnP will use its own multi-tenant app registration which usually has Graph rights.
+    # If specific scopes are needed, 'Register-PnPManagementShellAccess' might be required one-time.
 
-    # Detect Tenant Name via Graph
-    $Org = Invoke-PnPGraphMethod -Url "v1.0/organization" -Method Get
-    $VerifiedDomains = $Org.value[0].verifiedDomains
-    $OnMicrosoftDomain = $VerifiedDomains | Where-Object { $_.name -like "*.onmicrosoft.com" } | Select-Object -First 1 -ExpandProperty name
-    $TenantName = $OnMicrosoftDomain -replace "\.onmicrosoft\.com", ""
-    $AdminUrl = "https://$TenantName-admin.sharepoint.com"
-
-    Write-Host "  -> Detected Admin URL: $AdminUrl" -ForegroundColor DarkGray
-
-    # Re-connect specifically to the Admin URL to enable Tenant Admin cmdlets (Remove-PnPTenantSite)
-    Write-Host "Re-connecting to SharePoint Admin ($AdminUrl)..." -ForegroundColor Cyan
+    Write-Host "Connecting to SharePoint Admin ($AdminUrl)..." -ForegroundColor Cyan
     Connect-PnPOnline -Url $AdminUrl -Interactive -ErrorAction Stop
     Write-Host "Connected to SharePoint Admin!" -ForegroundColor Green
 
 } catch {
     Write-Error "Initialization Failed: $_"
     Write-Host "Please ensure you have Global Admin or SharePoint Admin rights."
+    Write-Host "If you see authentication errors, ensure you are not blocked by Conditional Access."
     exit 1
 }
 
