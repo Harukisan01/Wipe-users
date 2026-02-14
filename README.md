@@ -7,9 +7,9 @@ The solution is provided in three levels of complexity and security, ranging fro
 
 ## Mental Map
 
-*   **Level 1: Local Execution** (Interactive, Standard Security) -> `Level1_WipeUser_Local.ps1`
-*   **Level 2: Automation** (Non-interactive, Service Principal) -> `Level2_WipeUser_Automation.ps1`
-*   **Level 3: Bank Protection** (Phishing-Resistant, Passkey + Key Vault) -> `Level3_WipeUser_Passkey.ps1`
+*   **Level 1: Local Execution** (Interactive, Standard Security) -> `Level1_Local/Level1_WipeUser_Local.ps1`
+*   **Level 2: Automation** (Non-interactive, Service Principal) -> `Level2_Automation/Level2_WipeUser_Automation.ps1`
+*   **Level 3: Bank Protection** (Phishing-Resistant, Passkey + Key Vault) -> `Level3_BankProtection/Level3_WipeUser_Passkey.ps1`
 
 ---
 
@@ -19,7 +19,7 @@ The solution is provided in three levels of complexity and security, ranging fro
 **Security:** Relies on the user's interactive login (MFA supported).
 **How to use:** Run the script locally on your machine. You will be prompted to sign in via a browser.
 
-[View Level 1 Documentation](Level1_Local.md)
+[View Level 1 Documentation](Level1_Local/Level1_Local.md)
 
 ---
 
@@ -29,7 +29,7 @@ The solution is provided in three levels of complexity and security, ranging fro
 **Security:** Uses an Azure App Registration (Service Principal) with Client Secret.
 **How to use:** Configure an App Registration in Azure AD, grant permissions, and run the script non-interactively.
 
-[View Level 2 Documentation](Level2_Automation.md)
+[View Level 2 Documentation](Level2_Automation/Level2_Automation.md)
 
 ---
 
@@ -38,13 +38,13 @@ The solution is provided in three levels of complexity and security, ranging fro
 **Best for:** High-security environments, financial institutions, privileged access management.
 **Security:** Uses **FIDO2 Passkeys** stored in **Azure Key Vault** (HSM-backed). The private key never leaves the secure vault. This is resistant to phishing and credential theft.
 **How to use:**
-1.  Initialize the Key Vault infrastructure using `Initialize-PasskeyKeyVault.ps1`.
+1.  Initialize the Key Vault infrastructure using `Initialize-PasskeyKeyVault.ps1` (inside Level 3 folder).
 2.  Register a secure passkey for your admin account using `New-KeyVaultPasskey.ps1`.
 3.  Run the wipe script using `Level3_WipeUser_Passkey.ps1` which authenticates using the secure passkey.
 
 **Source:** Based on the work by [Nathan McNulty](https://github.com/nathanmcnulty/nathanmcnulty/tree/main/Entra/passkeys/keyvault).
 
-[View Level 3 Documentation](Level3_BankProtection.md)
+[View Level 3 Documentation](Level3_BankProtection/Level3_BankProtection.md)
 
 ---
 
@@ -53,13 +53,18 @@ The solution is provided in three levels of complexity and security, ranging fro
 ```
 /
 ├── README.md                           # This map
-├── Level1_Local.md                     # Doc for Level 1
-├── Level1_WipeUser_Local.ps1           # Script for Level 1
-├── Level2_Automation.md                # Doc for Level 2
-├── Level2_WipeUser_Automation.ps1      # Script for Level 2
-├── Level3_BankProtection.md            # Doc for Level 3
-├── Level3_WipeUser_Passkey.ps1         # Script for Level 3
-├── Initialize-PasskeyKeyVault.ps1      # Helper for Level 3 setup
-├── New-KeyVaultPasskey.ps1             # Helper for Level 3 registration
-└── PasskeyLogin.ps1                    # Helper for Level 3 authentication
+├── TESTING_GUIDE.md                    # Instructions for safe testing
+├── LINKEDIN_POST.md                    # Announcement text
+├── Level1_Local/
+│   ├── Level1_Local.md                 # Doc for Level 1
+│   └── Level1_WipeUser_Local.ps1       # Script for Level 1
+├── Level2_Automation/
+│   ├── Level2_Automation.md            # Doc for Level 2
+│   └── Level2_WipeUser_Automation.ps1  # Script for Level 2
+└── Level3_BankProtection/
+    ├── Level3_BankProtection.md        # Doc for Level 3
+    ├── Level3_WipeUser_Passkey.ps1     # Script for Level 3
+    ├── Initialize-PasskeyKeyVault.ps1  # Helper for Level 3 setup
+    ├── New-KeyVaultPasskey.ps1         # Helper for Level 3 registration
+    └── PasskeyLogin.ps1                # Helper for Level 3 authentication
 ```
