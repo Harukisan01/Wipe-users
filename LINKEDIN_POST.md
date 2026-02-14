@@ -17,6 +17,6 @@ We understand the critical importance of data sovereignty and GDPR compliance. T
 **Check it out on GitHub:**
 [Link to your repository]
 
-I welcome your feedback and contributions! Let's make M65 administration more secure together.
+I welcome your feedback and contributions! Let's make M365 administration more secure together.
 
 #Microsoft365 #PowerShell #CyberSecurity #Azure #Automation #GDPR #DataResidency #OpenSource #SysAdmin #FIDO2 #Passkeys

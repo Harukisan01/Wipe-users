@@ -23,7 +23,9 @@ try {
 
 if (-not $UserGroupId) {
     # Default Group ID for Testing/Fallback
-    $UserGroupId = "33a31c3c-b300-4879-bc15-6b6aae9c7f6e"
+    # $UserGroupId = "<INSERT_GROUP_OBJECT_ID_HERE>"
+    Write-Error "UserGroupId is missing. Please provide it as a variable or parameter."
+    exit 1
 }
 
 if (-not $TenantId -or -not $ClientId -or -not $ClientSecret) {
@@ -86,16 +88,16 @@ try {
     exit 1
 }
 
-# 2. SharePoint Online Authentication
+# 2. SharePoint Online Authentication (PnP PowerShell)
 try {
-    Write-Host "`nConfiguring SharePoint Online..." -ForegroundColor Cyan
+    Write-Host "`nConfiguring SharePoint Online (PnP PowerShell)..." -ForegroundColor Cyan
 
-    # Install module if missing
-    if (-not (Get-Module -ListAvailable -Name Microsoft.Online.SharePoint.PowerShell)) {
-        Write-Warning "SharePoint module not found. Installing..."
-        Install-Module -Name Microsoft.Online.SharePoint.PowerShell -Scope CurrentUser -Force -AllowClobber
+    # Install module if missing (PnP.PowerShell)
+    if (-not (Get-Module -ListAvailable -Name PnP.PowerShell)) {
+        Write-Warning "PnP.PowerShell module not found. Installing..."
+        Install-Module -Name PnP.PowerShell -Scope CurrentUser -Force -AllowClobber
     }
-    Import-Module Microsoft.Online.SharePoint.PowerShell -WarningAction SilentlyContinue -ErrorAction Stop
+    Import-Module PnP.PowerShell -WarningAction SilentlyContinue -ErrorAction Stop
 
     # Determine Admin URL
     Write-Host "Detecting Admin URL..." -ForegroundColor Gray
@@ -111,41 +113,28 @@ try {
         }
     } catch {
         # Legacy Fallback
-        Write-Warning "Graph method failed. Retrying legacy method..."
         $Org = Get-MgOrganization
         $OnMicrosoftDomain = $Org.VerifiedDomains | Where-Object { $_.Name -like "*.onmicrosoft.com" } | Select-Object -First 1 -ExpandProperty Name
         $TenantName = $OnMicrosoftDomain -replace "\.onmicrosoft\.com", ""
         $AdminUrl = "https://$TenantName-admin.sharepoint.com"
-        Write-Host "  -> Admin URL (Legacy): $AdminUrl" -ForegroundColor DarkGray
+        Write-Host "  -> Admin URL (Fallback): $AdminUrl" -ForegroundColor DarkGray
     }
 
-    # Request SPO Admin Token
-    Write-Host "Requesting SharePoint Admin Token..." -ForegroundColor Cyan
-    # Scope for SPO Admin is usually admin URL + /.default
-    $SpoToken = Get-OAuthToken -TenantId $TenantId -ClientId $ClientId -ClientSecret $PlainSecret -Resource $AdminUrl
-
-    # ATTEMPT 1: Connect-SPOService (modern auth, if supported)
+    # Connect PnP using ClientId/ClientSecret (App-Only)
+    Write-Host "Connecting to SharePoint via PnP..." -ForegroundColor Cyan
     try {
-        # Check if Connect-SPOService has -AccessToken
-        if (Get-Command Connect-SPOService | Select-Object -ExpandProperty Parameters | Where-Object {$_.Key -eq "AccessToken"}) {
-             Connect-SPOService -Url $AdminUrl -AccessToken $SpoToken -ErrorAction Stop
-             Write-Host "Connected to SharePoint Online (Native Module)." -ForegroundColor Green
-        } else {
-             # Fallback: Suggest PnP or similar
-             Write-Warning "Installed SharePoint module does not support -AccessToken."
-             Write-Warning "It is recommended to install PnP.PowerShell for full App-Only Auth."
-
-             throw "SPO Module obsolete or unsupported for App-Only without certificate."
-        }
+        # Using ClientSecret for App-Only auth
+        # Ensure the app has Sites.FullControl.All in SharePoint or Sites.ReadWrite.All in Graph
+        Connect-PnPOnline -Url $AdminUrl -ClientId $ClientId -ClientSecret $PlainSecret -ErrorAction Stop
+        Write-Host "Connected to SharePoint Online (PnP)." -ForegroundColor Green
     } catch {
-         Write-Warning "SPO Connection Failed: $_"
-         Write-Host "NOTE: To use App Registration with SPO, ensure you have the latest Microsoft.Online.SharePoint.PowerShell" -ForegroundColor Yellow
+         Write-Error "PnP Connection Failed: $_"
+         Write-Error "Ensure you are using PnP.PowerShell 2.x+ and the App Registration is configured correctly."
+         throw
     }
 
 } catch {
     Write-Error "SharePoint Initialization Error: $_"
-    # Automation: Continue? Or Exit?
-    # Destructive actions on OneDrive rely on this.
     Write-Error "CRITICAL: SharePoint connection failed. Exiting to prevent partial wipe."
     exit 1
 }
@@ -358,67 +347,53 @@ foreach ($UserRef in $Users) {
         }
     }
 
-    # 4. OneDrive (Site Deletion - SPO)
+    # 4. OneDrive (Site Deletion - PnP)
     Invoke-Safe -What "4. Total OneDrive Cleanup (Site Deletion)" -Action {
-        # App-Only already has Admin access
-        if (Grant-OneDriveAdminAccess -UserUpn $UserUpn -AdminUpn $ClientId) {
-            try {
-                # Attempt 1: Get URL from Graph
-                $drive = Get-MgUserDrive -UserId $UserId -Property Id, WebUrl -ErrorAction SilentlyContinue | Select-Object -First 1
-                $CleanUrl = $null
+        try {
+            # Attempt 1: Get URL from Graph
+            $drive = Get-MgUserDrive -UserId $UserId -Property Id, WebUrl -ErrorAction SilentlyContinue | Select-Object -First 1
+            $CleanUrl = $null
 
-                if ($drive) {
-                    $CleanUrl = $drive.WebUrl
-                    if ($CleanUrl -match "^(https://[^\/]+/personal/[^\/]+)") {
-                        $CleanUrl = $matches[1]
-                    }
-                } else {
-                    Write-Host "  -> OneDrive not found via Graph. Attempting manual calculation..." -ForegroundColor DarkGray
-                    $PersonalUrlPart = $UserUpn -replace "@","_" -replace "\.","_"
-                    $CleanUrl = "https://$TenantName-my.sharepoint.com/personal/$PersonalUrlPart"
+            if ($drive) {
+                $CleanUrl = $drive.WebUrl
+                if ($CleanUrl -match "^(https://[^\/]+/personal/[^\/]+)") {
+                    $CleanUrl = $matches[1]
                 }
-
-                if ($CleanUrl) {
-                    Write-Host "  -> Target Site Collection: $CleanUrl" -ForegroundColor Cyan
-
-                    # Existence Check
-                    $SiteExists = $null
-                    try { $SiteExists = Get-SPOSite -Identity $CleanUrl -ErrorAction SilentlyContinue } catch {}
-
-                    if ($SiteExists -or $drive) {
-                         # Remove the entire site
-                        Write-Host "  -> Total Site Collection Removal (Preventive 404)..." -ForegroundColor Yellow
-                        try {
-                            Remove-SPOSite -Identity $CleanUrl -NoWait -Confirm:$false -ErrorAction Stop
-                            Write-Host "  -> Site Collection Removed. User will see 404." -ForegroundColor Green
-                            $Results += [PSCustomObject]@{ User = $UserUpn; Status = "Deleted" }
-                        } catch {
-                            Write-Error "Remove-SPOSite Error: $_"
-                            $Results += [PSCustomObject]@{ User = $UserUpn; Status = "Error Delete" }
-                        }
-
-                        # RESET OPTION: Delete from Recycle Bin (Permanent) and Recreate (Empty)
-                        try {
-                            Write-Host "  -> Permanent Deletion (Reset)..." -ForegroundColor Red
-                            Remove-SPODeletedSite -Identity $CleanUrl -NoWait -Confirm:$false -ErrorAction SilentlyContinue
-
-                            Write-Host "  -> Requesting New OneDrive Provisioning (Empty)..." -ForegroundColor Cyan
-                            Request-SPOPersonalSite -UserEmails $UserUpn -NoWait -ErrorAction Stop
-                            Write-Host "  -> OK. The new site will be ready shortly." -ForegroundColor Green
-
-                            Write-Host "  -> OneDrive Link (manual check): $CleanUrl" -ForegroundColor Cyan
-                        } catch {
-                             Write-Host "    [WARN] Automatic reset failed: $_" -ForegroundColor Yellow
-                        }
-                    } else {
-                        Write-Host "  -> Site not found even manually." -ForegroundColor DarkGray
-                        $Results += [PSCustomObject]@{ User = $UserUpn; Status = "NotFound" }
-                    }
-                }
-            } catch {
-                Write-Host "  [!] OneDrive Error: $_" -ForegroundColor Red
-                $Results += [PSCustomObject]@{ User = $UserUpn; Status = "Error: $($_.Exception.Message)" }
+            } else {
+                Write-Host "  -> OneDrive not found via Graph. Attempting manual calculation..." -ForegroundColor DarkGray
+                $PersonalUrlPart = $UserUpn -replace "@","_" -replace "\.","_"
+                $CleanUrl = "https://$TenantName-my.sharepoint.com/personal/$PersonalUrlPart"
             }
+
+            if ($CleanUrl) {
+                Write-Host "  -> Target Site Collection: $CleanUrl" -ForegroundColor Cyan
+
+                # Existence Check (PnP currently connected to Admin)
+                # Remove-PnPTenantSite throws if not found? Let's try direct removal.
+
+                # Remove the entire site
+                Write-Host "  -> Total Site Collection Removal (Preventive 404)..." -ForegroundColor Yellow
+                try {
+                    Remove-PnPTenantSite -Url $CleanUrl -Force -ErrorAction Stop
+                    Write-Host "  -> Site Collection Removed (PnP). User will see 404." -ForegroundColor Green
+                    $Results += [PSCustomObject]@{ User = $UserUpn; Status = "Deleted" }
+                } catch {
+                    Write-Host "  -> Site likely didn't exist or error: $($_.Exception.Message)" -ForegroundColor Gray
+                    $Results += [PSCustomObject]@{ User = $UserUpn; Status = "NotFound/Error" }
+                }
+
+                # RESET OPTION: Delete from Recycle Bin (Permanent)
+                try {
+                    Write-Host "  -> Permanent Deletion (Reset)..." -ForegroundColor Red
+                    Remove-PnPTenantSite -Url $CleanUrl -FromRecycleBin -Force -ErrorAction SilentlyContinue
+                    Write-Host "  -> Recycle bin purged." -ForegroundColor Green
+                } catch {
+                     Write-Host "    [WARN] Recycle bin purge failed: $_" -ForegroundColor Yellow
+                }
+            }
+        } catch {
+            Write-Host "  [!] OneDrive Error: $_" -ForegroundColor Red
+            $Results += [PSCustomObject]@{ User = $UserUpn; Status = "Error: $($_.Exception.Message)" }
         }
     }
 
@@ -446,18 +421,22 @@ foreach ($UserRef in $Users) {
 # DEFINITIVE PURGE (GLOBAL)
 # ==============================
 Invoke-Safe -What "DEFINITIVE PURGE (Recycle Bin - Personal Sites)" -Action {
-    Write-Host "Searching for personal sites in Recycle Bin (Get-SPODeletedSite)..." -ForegroundColor Yellow
-    $DeletedSites = Get-SPODeletedSite | Where-Object {$_.Url -like "*-my.sharepoint.com/personal/*"}
+    Write-Host "Searching for personal sites in Recycle Bin (Get-PnPTenantRecycleBinItem)..." -ForegroundColor Yellow
+    try {
+        $DeletedSites = Get-PnPTenantRecycleBinItem | Where-Object {$_.Url -like "*-my.sharepoint.com/personal/*"}
 
-    if ($DeletedSites) {
-        Write-Host "Found $($DeletedSites.Count) sites in Recycle Bin." -ForegroundColor Cyan
-        foreach ($DeletedSite in $DeletedSites) {
-            Write-Host "  -> Definitive purge: $($DeletedSite.Url)" -ForegroundColor Red
-            Remove-SPODeletedSite -Identity $DeletedSite.Url -Confirm:$false -ErrorAction SilentlyContinue
+        if ($DeletedSites) {
+            Write-Host "Found $($DeletedSites.Count) sites in Recycle Bin." -ForegroundColor Cyan
+            foreach ($DeletedSite in $DeletedSites) {
+                Write-Host "  -> Definitive purge: $($DeletedSite.Url)" -ForegroundColor Red
+                Remove-PnPTenantSite -Url $DeletedSite.Url -FromRecycleBin -Force -ErrorAction SilentlyContinue
+            }
+            Write-Host "Purge completed." -ForegroundColor Green
+        } else {
+            Write-Host "No personal sites found in Recycle Bin." -ForegroundColor Gray
         }
-        Write-Host "Purge completed." -ForegroundColor Green
-    } else {
-        Write-Host "No personal sites found in Recycle Bin." -ForegroundColor Gray
+    } catch {
+        Write-Host "Recycle bin access failed: $_" -ForegroundColor Yellow
     }
 }
 

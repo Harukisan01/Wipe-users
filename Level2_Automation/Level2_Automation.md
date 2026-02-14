@@ -22,6 +22,9 @@ This level is designed for automated execution using an Azure Automation Account
     *   Create an Azure Automation Account.
     *   Import required modules: `Microsoft.Graph.Authentication`, `Microsoft.Online.SharePoint.PowerShell`.
     *   Create Variables or Credentials for `TenantId`, `ClientId`, and `ClientSecret`.
+    *   **Required Module:** `PnP.PowerShell` (the script will attempt to install it if missing, but pre-installation is recommended for automation).
+    *   Import required modules: `Microsoft.Graph.Authentication`, `PnP.PowerShell`.
+    *   Create Variables or Credentials for `TenantId`, `ClientId`, and `ClientSecret`.
 
 ## Usage
 

@@ -2,7 +2,7 @@
 # CONFIGURATION
 # ==============================
 # Group ID containing the users to wipe
-$UserGroupId = "33a31c3c-b300-4879-bc15-6b6aae9c7f6e"
+$UserGroupId = "<INSERT_GROUP_OBJECT_ID_HERE>"
 
 # Security Options
 $DryRun = $false

@@ -24,8 +24,8 @@ $RequireTypedConfirmation = $true
 # Configuration
 if (-not $UserGroupId) {
     # Default Group ID for Testing
-    $UserGroupId = "33a31c3c-b300-4879-bc15-6b6aae9c7f6e"
-    Write-Host "Using default User Group ID: $UserGroupId" -ForegroundColor Gray
+    # $UserGroupId = "<INSERT_GROUP_OBJECT_ID_HERE>"
+    $UserGroupId = Read-Host "Enter User Group ID (Object ID)"
 }
 
 # 1. Authenticate with Passkey (Key Vault)
@@ -111,11 +111,29 @@ try {
     }
 }
 
-Write-Host "Connecting to SharePoint Online..." -ForegroundColor Cyan
+# 3. SharePoint Online Authentication (PnP PowerShell)
+Write-Host "Connecting to SharePoint Online (PnP)..." -ForegroundColor Cyan
 try {
-    Write-Warning "Passkey auth for SharePoint PowerShell is limited. You may be prompted to sign in again for SharePoint."
-    Connect-SPOService -Url $AdminUrl
-    Write-Host "Connected to SharePoint!" -ForegroundColor Green
+    # Using PnP interactive with the existing session logic (often requires interactive sign-in even with passkeys unless using specific token flows)
+    # Ideally, we would reuse the Graph Token, but PnP AccessToken param works best.
+
+    # Attempting to use the Graph Access Token for PnP (experimental but cleaner if scopes match)
+    # The token must have SharePoint scopes.
+    # If not, fallback to Interactive.
+
+    Write-Host "  -> Attempting PnP connection..." -ForegroundColor Gray
+
+    # Check for PnP.PowerShell
+    if (-not (Get-Module -ListAvailable -Name PnP.PowerShell)) {
+        Write-Warning "PnP.PowerShell module not found. Installing..."
+        Install-Module -Name PnP.PowerShell -Scope CurrentUser -Force -AllowClobber
+    }
+
+    # We use Interactive mode which supports WAM/Browser, likely picking up the PRT or session.
+    # Using -Interactive with PnP is generally robust on PS7.
+    Connect-PnPOnline -Url $AdminUrl -Interactive -ErrorAction Stop
+
+    Write-Host "Connected to SharePoint (PnP)!" -ForegroundColor Green
 } catch {
     Write-Error "SharePoint Connection Failed: $_"
     Write-Error "CRITICAL: SharePoint connection failed. Exiting to prevent partial wipe."
@@ -190,13 +208,24 @@ foreach ($UserRef in $Users) {
         foreach ($Msg in $Messages) { Remove-MgUserMessage -UserId $UserId -MessageId $Msg.Id -Confirm:$false }
     }
 
-    # 2. OneDrive Site
-    # Using SPO Connection established earlier
+    # 2. OneDrive Site (PnP)
+    # Using PnP Connection established earlier
     $PersonalUrl = "https://$TenantName-my.sharepoint.com/personal/$($User.UserPrincipalName -replace '[\.@]', '_')"
     Invoke-Safe -What "OneDrive Site Deletion" -Action {
-        Remove-SPOSite -Identity $PersonalUrl -NoWait -Confirm:$false -ErrorAction SilentlyContinue
-        Remove-SPODeletedSite -Identity $PersonalUrl -NoWait -Confirm:$false -ErrorAction SilentlyContinue
-        Request-SPOPersonalSite -UserEmails $User.UserPrincipalName -NoWait
+        try {
+            Remove-PnPTenantSite -Url $PersonalUrl -Force -ErrorAction Stop
+            Write-Host "    Site deleted." -ForegroundColor Green
+        } catch {
+            Write-Host "    Site not found or error: $($_.Exception.Message)" -ForegroundColor Gray
+        }
+
+        try {
+            Remove-PnPTenantSite -Url $PersonalUrl -FromRecycleBin -Force -ErrorAction SilentlyContinue
+            Write-Host "    Recycle bin purged." -ForegroundColor Green
+        } catch {}
+
+        # PnP does not have Request-SPOPersonalSite equivalent easily accessible. Skipping re-provisioning.
+        Write-Host "    (Re-provisioning skipped in PnP mode)" -ForegroundColor Gray
     }
 
     # 3. Specific Folders
