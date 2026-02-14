@@ -71,17 +71,27 @@ try {
     do {
         try {
             Write-Host "Connecting to SharePoint ($AdminUrl)..." -ForegroundColor Cyan
+
+            # Clear previous context if any to avoid token conflicts
+            Disconnect-SPOService -ErrorAction SilentlyContinue
+
             Connect-SPOService -Url $AdminUrl -ErrorAction Stop
             Write-Host "Connected to SharePoint!" -ForegroundColor Green
             $connected = $true
         } catch {
-            Write-Host "Connection Error ($AdminUrl): $($_.Exception.Message)" -ForegroundColor Red
-            $userInput = Read-Host "Enter SharePoint Admin URL manually (e.g., https://tenant-admin.sharepoint.com)"
+            $ErrorMsg = $_.Exception.Message
+            Write-Host "Connection Error ($AdminUrl): $ErrorMsg" -ForegroundColor Red
+
+            if ($ErrorMsg -like "*(400)*") {
+                Write-Host "  [TIP] '400 Bad Request' often indicates a session conflict or missing SharePoint Admin role." -ForegroundColor Yellow
+                Write-Host "  [TIP] Please ensure you are a Global or SharePoint Admin." -ForegroundColor Yellow
+            }
+
+            $userInput = Read-Host "Press ENTER to retry, or type new Admin URL (e.g., https://tenant-admin.sharepoint.com)"
             if (-not [string]::IsNullOrWhiteSpace($userInput)) {
                 $AdminUrl = $userInput.Trim()
             } else {
-                Write-Error "No URL provided. Cannot manage permissions."
-                break
+                Write-Host "Retrying..." -ForegroundColor Gray
             }
         }
     } until ($connected)

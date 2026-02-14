@@ -10,10 +10,20 @@ $DryRun = $false # Set to $true to simulate actions without execution
 # $ClientId = "..."
 # $ClientSecret = "..."
 
+# Attempt to retrieve from Azure Automation Variables
+try {
+    if (-not $TenantId) { $TenantId = Get-AutomationVariable -Name 'TenantId' -ErrorAction SilentlyContinue }
+    if (-not $ClientId) { $ClientId = Get-AutomationVariable -Name 'ClientId' -ErrorAction SilentlyContinue }
+    if (-not $ClientSecret) { $ClientSecret = Get-AutomationVariable -Name 'ClientSecret' -ErrorAction SilentlyContinue }
+    if (-not $UserGroupId) { $UserGroupId = Get-AutomationVariable -Name 'UserGroupId' -ErrorAction SilentlyContinue }
+    $NotificationEmail = Get-AutomationVariable -Name 'NotificationEmail' -ErrorAction SilentlyContinue
+} catch {
+    # Ignore if not running in Azure Automation or variables not found
+}
+
 if (-not $TenantId -or -not $ClientId -or -not $ClientSecret) {
-    Write-Error "Missing required variables: TenantId, ClientId, ClientSecret. Please set them or pass them as parameters."
-    # In Automation Account, these might come from Get-AutomationVariable or similar.
-    # For now, we assume they are available in the scope or added above.
+    Write-Error "Missing required variables: TenantId, ClientId, ClientSecret. Please set them as Automation Variables or pass them as parameters."
+    exit 1
 }
 
 # Convert SecureString to Plain Text for HTTP requests if needed
@@ -134,6 +144,41 @@ try {
 # ==============================
 # USEFUL FUNCTIONS
 # ==============================
+
+function Send-NotificationEmail {
+    param($To, $Subject, $Body)
+
+    if (-not $To) { return }
+
+    Write-Host "Sending notification email to $To..." -ForegroundColor Cyan
+
+    $EmailJson = @{
+        message = @{
+            subject = $Subject
+            body = @{
+                contentType = "Text"
+                content = $Body
+            }
+            toRecipients = @(
+                @{
+                    emailAddress = @{
+                        address = $To
+                    }
+                }
+            )
+        }
+    } | ConvertTo-Json -Depth 10
+
+    try {
+        # Send as the recipient (self-notification) or specific user.
+        # App-Only with Mail.Send allows sending as any user.
+        Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/users/$To/sendMail" -Body $EmailJson
+        Write-Host "Email sent successfully!" -ForegroundColor Green
+    } catch {
+        Write-Warning "Failed to send email: $_"
+        Write-Warning "Ensure the App Registration has 'Mail.Send' permission and '$To' is a valid user."
+    }
+}
 
 function Confirm-DestructiveAction {
     param([string]$Title, [string]$Details)
@@ -409,6 +454,20 @@ Invoke-Safe -What "DEFINITIVE PURGE (Recycle Bin - Personal Sites)" -Action {
 
 Write-Host "`n=== ONEDRIVE SUMMARY ===" -ForegroundColor Cyan
 $Results | Format-Table -AutoSize
+
+# Send Email Notification
+if ($NotificationEmail) {
+    $EmailSubject = "Wipe User Automation Report - $(Get-Date -Format 'yyyy-MM-dd')"
+    $EmailBody = "Wipe User Automation Completed.`n`nProcessed Users: $($Users.Count)`n`nResults:`n"
+
+    if ($Results) {
+        $EmailBody += ($Results | Out-String)
+    } else {
+        $EmailBody += "No actions recorded or no errors."
+    }
+
+    Send-NotificationEmail -To $NotificationEmail -Subject $EmailSubject -Body $EmailBody
+}
 
 Write-Host "`n`n========================================" -ForegroundColor Green
 Write-Host "FULL CLEANUP COMPLETED (APP REGISTRATION)" -ForegroundColor Green
