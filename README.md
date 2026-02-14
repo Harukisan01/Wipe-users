@@ -1,5 +1,7 @@
 # Wipe User Tool - Comprehensive Guide
 
+![Project Logo](assets/logo.png)
+
 This repository contains tools to securely wipe user data from Microsoft 365 (Exchange, OneDrive, SharePoint).
 The solution is provided in three levels of complexity and security, ranging from local interactive execution to high-security bank-grade protection using Passkeys.
 
