@@ -23,7 +23,9 @@ $RequireTypedConfirmation = $true
 
 # Configuration
 if (-not $UserGroupId) {
-    $UserGroupId = Read-Host "Enter User Group ID (Object ID)"
+    # Default Group ID for Testing
+    $UserGroupId = "33a31c3c-b300-4879-bc15-6b6aae9c7f6e"
+    Write-Host "Using default User Group ID: $UserGroupId" -ForegroundColor Gray
 }
 
 # 1. Authenticate with Passkey (Key Vault)

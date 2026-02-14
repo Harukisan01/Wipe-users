@@ -21,6 +21,11 @@ try {
     # Ignore if not running in Azure Automation or variables not found
 }
 
+if (-not $UserGroupId) {
+    # Default Group ID for Testing/Fallback
+    $UserGroupId = "33a31c3c-b300-4879-bc15-6b6aae9c7f6e"
+}
+
 if (-not $TenantId -or -not $ClientId -or -not $ClientSecret) {
     Write-Error "Missing required variables: TenantId, ClientId, ClientSecret. Please set them as Automation Variables or pass them as parameters."
     exit 1
