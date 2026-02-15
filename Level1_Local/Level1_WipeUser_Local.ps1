@@ -9,62 +9,96 @@ $DryRun = $false
 $RequireTypedConfirmation = $true
 
 # ==============================
-# SCRIPT START - PURE PNP POWERSHELL 7
+# SCRIPT START - LEVEL 1 (HYBRID ISOLATION)
 # ==============================
 $ErrorActionPreference = "Stop"
 
-# Scopes needed for Graph operations via PnP
-$Scopes = @(
-    "GroupMember.Read.All",
-    "Mail.ReadWrite",
-    "Files.ReadWrite.All",
-    "User.ReadWrite.All",
-    "Sites.ReadWrite.All",
-    "Sites.FullControl.All", # For SPO Admin operations
-    "Organization.Read.All"
-)
+Write-Host "Initializing Level 1 Wipe User Tool..." -ForegroundColor Cyan
 
-# 1. PnP Module Verification
-Write-Host "Verifying PnP.PowerShell module..." -ForegroundColor Cyan
-if (-not (Get-Module -ListAvailable -Name PnP.PowerShell)) {
-    Write-Warning "PnP.PowerShell module not found. Installing..."
-    Install-Module -Name PnP.PowerShell -Scope CurrentUser -Force -AllowClobber
-}
-Import-Module PnP.PowerShell -WarningAction SilentlyContinue -ErrorAction Stop
-
-# 2. Authentication & Admin URL Discovery
-Write-Host "Connecting to Microsoft 365..." -ForegroundColor Cyan
-
-# Strategy: Use Microsoft.Graph just to get the user Context (UPN) to infer the tenant.
-# This avoids the buggy Get-MgOrganization cmdlet but uses the working Connect-MgGraph.
+# ---------------------------------------------------------
+# PHASE 1: DISCOVERY (Microsoft.Graph.Authentication)
+# ---------------------------------------------------------
+# We use Graph ONLY to discover the Tenant Name securely.
+# We explicitly unload modules to prevent DLL conflicts (TypeLoadException).
 
 try {
-    # Connect to Graph to get Context
-    Write-Host "Authenticating to Graph for Auto-Discovery..." -ForegroundColor Gray
+    Write-Host "`n[Phase 1] Discovery: Detecting Tenant Name..." -ForegroundColor Cyan
+
+    # 1. Clean Environment
+    if (Get-Module -Name PnP.PowerShell) { Remove-Module PnP.PowerShell -Force -ErrorAction SilentlyContinue }
+    if (Get-Module -Name Microsoft.Graph*) { Remove-Module Microsoft.Graph* -Force -ErrorAction SilentlyContinue }
+
+    # 2. Load Graph Auth Only
+    if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
+        Write-Warning "Microsoft.Graph.Authentication not found. Installing..."
+        Install-Module Microsoft.Graph.Authentication -Scope CurrentUser -Force -AllowClobber
+    }
+    Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
+
+    # 3. Connect & Get Context
+    # Disable WAM for Graph too, just in case
+    $env:MSAL_USE_BROKER_WITH_WAM = "false"
+
+    Write-Host "  -> Authenticating to Graph (User.Read)..." -ForegroundColor Gray
     Connect-MgGraph -Scopes "User.Read" -NoWelcome -ErrorAction Stop
 
     $ctx = Get-MgContext
     $UserUpn = $ctx.Account
 
+    # 4. Parse Tenant
     if ($UserUpn -match "@(?<domain>[^\.]+)\.onmicrosoft\.com") {
         $TenantName = $Matches['domain']
-        $AdminUrl = "https://$TenantName-admin.sharepoint.com"
-        Write-Host "  -> Auto-detected Admin URL: $AdminUrl" -ForegroundColor Green
+        Write-Host "  -> Auto-detected Tenant: $TenantName" -ForegroundColor Green
     } else {
-        # Fallback if custom domain or parsing fails
-        Write-Warning "Could not infer tenant from UPN: $UserUpn"
-        $TenantName = Read-Host "Enter your Tenant Name (e.g. 'contoso')"
-        $AdminUrl = "https://$TenantName-admin.sharepoint.com"
+        # Try finding it via Verified Domains (if User.Read allows reading org profile? usually needs Organization.Read.All)
+        # Since we want to be minimal scope, we might fallback to prompt if UPN is custom.
+        # But wait! If we have a custom domain, we might not know the -admin URL prefix easily?
+        # Actually, it is ALWAYS <onmicrosoft-prefix>-admin.sharepoint.com.
+        # If UPN is user@contoso.com, we don't know the onmicrosoft prefix easily without Org.Read.All.
+
+        # Let's try to get Org Profile if scopes allow (User.Read might not be enough for full list, but let's try)
+        # If this fails, we MUST prompt.
+        Write-Warning "UPN ($UserUpn) does not reveal the onmicrosoft domain."
+        $TenantName = Read-Host "Please enter your Tenant Name (e.g. 'contoso' for contoso.onmicrosoft.com)"
     }
 
-    # Now Connect to SharePoint via PnP
-    Write-Host "Connecting to SharePoint Admin ($AdminUrl)..." -ForegroundColor Cyan
-    Connect-PnPOnline -Url $AdminUrl -Interactive -ErrorAction Stop
-    Write-Host "Connected to SharePoint Admin!" -ForegroundColor Green
+    $AdminUrl = "https://$TenantName-admin.sharepoint.com"
+    Write-Host "  -> Target Admin URL: $AdminUrl" -ForegroundColor Green
+
+    # 5. CLEANUP GRAPH
+    Write-Host "  -> Cleaning up Graph module to prevent conflicts..." -ForegroundColor Gray
+    Disconnect-MgGraph -ErrorAction SilentlyContinue
+    Remove-Module Microsoft.Graph.Authentication -Force -ErrorAction SilentlyContinue
+    Remove-Module Microsoft.Graph* -Force -ErrorAction SilentlyContinue
 
 } catch {
-    Write-Error "Initialization Failed: $_"
-    Write-Host "Please ensure you have Global Admin rights."
+    Write-Error "Discovery Failed: $_"
+    exit 1
+}
+
+# ---------------------------------------------------------
+# PHASE 2: EXECUTION (PnP.PowerShell)
+# ---------------------------------------------------------
+try {
+    Write-Host "`n[Phase 2] Execution: Connecting to SharePoint..." -ForegroundColor Cyan
+
+    # 1. Load PnP
+    if (-not (Get-Module -ListAvailable -Name PnP.PowerShell)) {
+        Write-Warning "PnP.PowerShell not found. Installing..."
+        Install-Module PnP.PowerShell -Scope CurrentUser -Force -AllowClobber
+    }
+    Import-Module PnP.PowerShell -ErrorAction Stop
+
+    # 2. Connect PnP
+    # Using Interactive login. We don't specify scopes to avoid parameter errors on some versions.
+    # PnP will handle its own app registration.
+
+    Connect-PnPOnline -Url $AdminUrl -Interactive -ErrorAction Stop
+    Write-Host "Connected to SharePoint Admin via PnP!" -ForegroundColor Green
+
+} catch {
+    Write-Error "SharePoint Connection Failed: $_"
+    Write-Host "CRITICAL: Unable to connect to SharePoint. Exiting to prevent partial wipe." -ForegroundColor Red
     exit 1
 }
 
@@ -106,14 +140,14 @@ function Invoke-Safe {
 
 Write-Host "`nRetrieving members of group $UserGroupId..." -ForegroundColor Cyan
 
-# Use Graph API via PnP to get group members
 try {
+    # Get Group Members via PnP Graph
     $GroupMembersUrl = "v1.0/groups/$UserGroupId/members?`$select=id,userPrincipalName,displayName"
     $Response = Invoke-PnPGraphMethod -Url $GroupMembersUrl -Method Get
     $Users = $Response.value
-    # Note: Paging handling might be needed for large groups, but basic wipe usually targets specific sets.
 } catch {
     Write-Error "Failed to retrieve group members: $_"
+    Write-Host "Tip: Ensure the PnP Application has 'GroupMember.Read.All' permissions." -ForegroundColor Yellow
     exit 1
 }
 
@@ -138,7 +172,6 @@ foreach ($User in $Users) {
     $UserUpn = $User.userPrincipalName
     $UserName = $User.displayName
 
-    # Skip non-users (e.g. groups inside groups) if OData type check needed
     if (-not $UserUpn) { continue }
 
     Write-Host "`n===========================================" -ForegroundColor Cyan
@@ -147,21 +180,18 @@ foreach ($User in $Users) {
 
     # 1. Email Cleanup (Graph)
     Invoke-Safe -What "1. Email Cleanup" -Action {
-        # Get Messages
         $MsgUrl = "v1.0/users/$UserId/messages?`$select=id"
         $Messages = (Invoke-PnPGraphMethod -Url $MsgUrl -Method Get).value
         Write-Host "    messages found: $($Messages.Count)" -ForegroundColor Yellow
 
         foreach ($Msg in $Messages) {
-            # Delete Message
             Invoke-PnPGraphMethod -Url "v1.0/users/$UserId/messages/$($Msg.id)" -Method Delete
         }
         Write-Host "    Completed!" -ForegroundColor Green
     }
 
-    # 2. Deleted Items (Graph) - "soft" deleted items in Mailbox
+    # 2. Deleted Items (Graph)
     Invoke-Safe -What "2. Deleted Items Cleanup" -Action {
-        # Get 'Deleted Items' folder ID
         $Folders = (Invoke-PnPGraphMethod -Url "v1.0/users/$UserId/mailFolders" -Method Get).value
         $DeletedFolder = $Folders | Where-Object { $_.displayName -eq "Deleted Items" }
 
@@ -175,61 +205,26 @@ foreach ($User in $Users) {
         }
     }
 
-    # 3. Specific OneDrive Folders (Graph/Drive)
-    Invoke-Safe -What "3. Specific OneDrive Folders Cleanup" -Action {
-        # Get Drive ID
-        try {
-            $Drive = Invoke-PnPGraphMethod -Url "v1.0/users/$UserId/drive" -Method Get
-            $DriveId = $Drive.id
-
-            if ($DriveId) {
-                # Helper to delete items in a path
-                # Note: Graph API 'search' or 'root/children' is needed.
-                # Simplified: Wiping the whole site is step 4. This step 3 attempts specific folder cleanup.
-                # Given we do Step 4 (Total Site Deletion), granular folder deletion is redundant but requested.
-                # We will perform a Recycle Bin purge here as it persists.
-
-                Write-Host "  -> Emptying OneDrive Recycle Bin..."
-                # Graph API for Recycle Bin: DELETE /drives/{drive-id}/items/{item-id} where item is in recycle bin?
-                # Actually, /drive/items/root/children doesn't show deleted.
-                # But Step 4 deletes the SITE, which is more effective.
-                Write-Host "    (Handled by Site Deletion in Step 4)" -ForegroundColor Gray
-            }
-        } catch {
-            Write-Host "  [WARN] No drive found or access denied." -ForegroundColor Yellow
-        }
-    }
-
     # 4. OneDrive (Site Deletion - PnP)
     Invoke-Safe -What "4. Total OneDrive Cleanup (Site Deletion)" -Action {
-        # Calculate Personal Site URL
         $PersonalUrlPart = $UserUpn -replace "@","_" -replace "\.","_"
         $CleanUrl = "https://$TenantName-my.sharepoint.com/personal/$PersonalUrlPart"
 
         Write-Host "  -> Target Site: $CleanUrl" -ForegroundColor Cyan
 
-        # Remove Site
         try {
             Remove-PnPTenantSite -Url $CleanUrl -Force -ErrorAction Stop
             Write-Host "  -> Site Collection Removed." -ForegroundColor Green
             $Results += [PSCustomObject]@{ User = $UserUpn; Status = "Deleted" }
         } catch {
             Write-Host "  -> Site likely not found or already deleted." -ForegroundColor Gray
-            $Results += [PSCustomObject]@{ User = $UserUpn; Status = "NotFound/AlreadyDeleted" }
+            $Results += [PSCustomObject]@{ User = $UserUpn; Status = "NotFound" }
         }
 
-        # Purge from Recycle Bin
         try {
-            Write-Host "  -> Purging from Recycle Bin..." -ForegroundColor Red
             Remove-PnPTenantSite -Url $CleanUrl -FromRecycleBin -Force -ErrorAction SilentlyContinue
-            Write-Host "  -> Purged." -ForegroundColor Green
+            Write-Host "  -> Purged from Recycle Bin." -ForegroundColor Green
         } catch {}
-    }
-
-    # 5. Activities (Graph) - requires UserActivity.ReadWrite.CreatedByApp usually, but checked scopes.
-    Invoke-Safe -What "5. Activities Cleanup" -Action {
-        # Note: Graph API for activities often requires specific app ID matching. Skipping deep wipe to avoid errors, as session revoke is more important.
-        Write-Host "    (Skipped for stability)" -ForegroundColor Gray
     }
 
     # 6. Sessions (Graph)
@@ -243,25 +238,20 @@ foreach ($User in $Users) {
 }
 
 # ==============================
-# DEFINITIVE PURGE (GLOBAL)
+# DEFINITIVE PURGE
 # ==============================
-Invoke-Safe -What "DEFINITIVE PURGE (Recycle Bin - Personal Sites)" -Action {
-    Write-Host "Searching for personal sites in Recycle Bin (Get-PnPTenantRecycleBinItem)..." -ForegroundColor Yellow
+Invoke-Safe -What "DEFINITIVE PURGE (Recycle Bin)" -Action {
+    Write-Host "Checking Tenant Recycle Bin..." -ForegroundColor Yellow
     try {
         $DeletedSites = Get-PnPTenantRecycleBinItem | Where-Object {$_.Url -like "*-my.sharepoint.com/personal/*"}
-
         if ($DeletedSites) {
-            Write-Host "Found $($DeletedSites.Count) sites in Recycle Bin." -ForegroundColor Cyan
             foreach ($DeletedSite in $DeletedSites) {
-                Write-Host "  -> Definitive purge: $($DeletedSite.Url)" -ForegroundColor Red
+                Write-Host "  -> Purge: $($DeletedSite.Url)" -ForegroundColor Red
                 Remove-PnPTenantSite -Url $DeletedSite.Url -FromRecycleBin -Force -ErrorAction SilentlyContinue
             }
-            Write-Host "Purge completed." -ForegroundColor Green
-        } else {
-            Write-Host "No personal sites found in Recycle Bin." -ForegroundColor Gray
         }
     } catch {
-        Write-Host "Recycle bin check failed: $_" -ForegroundColor Yellow
+        Write-Host "Recycle bin check failed or empty." -ForegroundColor Gray
     }
 }
 
@@ -271,4 +261,3 @@ $Results | Format-Table -AutoSize
 Write-Host "`n`n========================================" -ForegroundColor Green
 Write-Host "FULL CLEANUP COMPLETED (PURE PNP PS7)" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
-Write-Host ""
