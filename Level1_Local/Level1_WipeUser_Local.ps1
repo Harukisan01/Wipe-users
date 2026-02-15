@@ -35,33 +35,36 @@ Import-Module PnP.PowerShell -WarningAction SilentlyContinue -ErrorAction Stop
 # 2. Authentication & Admin URL Discovery
 Write-Host "Connecting to Microsoft 365..." -ForegroundColor Cyan
 
-# PnP PowerShell usually requires a Target URL to connect.
-# Auto-discovery without a URL is difficult/fragile.
-# We will ask for the Tenant Domain to ensure stability.
-
-$TenantName = Read-Host "Enter your Tenant Name (e.g. 'contoso' for contoso.onmicrosoft.com)"
-if ([string]::IsNullOrWhiteSpace($TenantName)) {
-    Write-Error "Tenant Name is required."
-    exit 1
-}
-
-$AdminUrl = "https://$TenantName-admin.sharepoint.com"
-Write-Host "Target Admin URL: $AdminUrl" -ForegroundColor DarkGray
+# Strategy: Use Microsoft.Graph just to get the user Context (UPN) to infer the tenant.
+# This avoids the buggy Get-MgOrganization cmdlet but uses the working Connect-MgGraph.
 
 try {
-    # Connect directly to the Admin URL
-    # We remove -Scopes as it's not supported in all PnP versions directly on Connect.
-    # PnP will use its own multi-tenant app registration which usually has Graph rights.
-    # If specific scopes are needed, 'Register-PnPManagementShellAccess' might be required one-time.
+    # Connect to Graph to get Context
+    Write-Host "Authenticating to Graph for Auto-Discovery..." -ForegroundColor Gray
+    Connect-MgGraph -Scopes "User.Read" -NoWelcome -ErrorAction Stop
 
+    $ctx = Get-MgContext
+    $UserUpn = $ctx.Account
+
+    if ($UserUpn -match "@(?<domain>[^\.]+)\.onmicrosoft\.com") {
+        $TenantName = $Matches['domain']
+        $AdminUrl = "https://$TenantName-admin.sharepoint.com"
+        Write-Host "  -> Auto-detected Admin URL: $AdminUrl" -ForegroundColor Green
+    } else {
+        # Fallback if custom domain or parsing fails
+        Write-Warning "Could not infer tenant from UPN: $UserUpn"
+        $TenantName = Read-Host "Enter your Tenant Name (e.g. 'contoso')"
+        $AdminUrl = "https://$TenantName-admin.sharepoint.com"
+    }
+
+    # Now Connect to SharePoint via PnP
     Write-Host "Connecting to SharePoint Admin ($AdminUrl)..." -ForegroundColor Cyan
     Connect-PnPOnline -Url $AdminUrl -Interactive -ErrorAction Stop
     Write-Host "Connected to SharePoint Admin!" -ForegroundColor Green
 
 } catch {
     Write-Error "Initialization Failed: $_"
-    Write-Host "Please ensure you have Global Admin or SharePoint Admin rights."
-    Write-Host "If you see authentication errors, ensure you are not blocked by Conditional Access."
+    Write-Host "Please ensure you have Global Admin rights."
     exit 1
 }
 
