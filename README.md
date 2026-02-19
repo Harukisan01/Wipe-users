@@ -1,1 +1,1 @@
-https://github.com/Harukisan01/Wipe-users/blob/main/logo.png
+![Wipe-users Logo](https://raw.githubusercontent.com/Harukisan01/Wipe-users/main/logo.png)
